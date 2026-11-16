@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.t
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.foundation.background
@@ -70,11 +71,10 @@ internal fun CustomSourcesSection(state: PlayerUiState, viewModel: ExternalPlayb
         viewModel.customSourceForm = form
     }
     val editing = form?.source
-    SettingsSection("Custom sources") {
+    SettingsSection(t("Custom sources")) {
         Searchable("Custom sources", "Custom", "API", "URL") {
             Text(
-                "Your own lyrics sources: a web address with the song filled in, answering with TTML, LRC or plain text, " +
-                    "as is or in JSON. They join the order above.",
+                t("Your own lyrics sources: a web address with the song filled in, answering with TTML, LRC or plain text, as is or in JSON. They join the order above."),
                 style = DescriptionStyle,
                 modifier = Modifier.padding(horizontal = 2.dp).padding(bottom = SpicySpacing.S1),
             )
@@ -84,7 +84,7 @@ internal fun CustomSourcesSection(state: PlayerUiState, viewModel: ExternalPlayb
                 CustomSourceEditor(form!!, saved = true, viewModel) { edit(null) }
             } else {
                 SettingRow(label = custom.name, description = custom.url.toHttpUrlOrNull()?.host ?: custom.url, icon = Icons.Rounded.Link) {
-                    SpicyButton("Edit", onClick = { edit(custom) }, enabled = editing == null)
+                    SpicyButton(t("Edit"), onClick = { edit(custom) }, enabled = editing == null)
                 }
             }
         }
@@ -93,18 +93,18 @@ internal fun CustomSourcesSection(state: PlayerUiState, viewModel: ExternalPlayb
             CustomSourceEditor(form!!, saved = false, viewModel) { edit(null) }
         } else if (editing == null) {
             SettingRow(
-                label = "Add a source",
-                description = "Start a new one, or paste one someone shared.",
+                label = t("Add a source"),
+                description = t("Start a new one, or paste one someone shared."),
                 icon = Icons.Rounded.Add,
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(SpicySpacing.S2)) {
-                    SpicyButton("Paste", onClick = {
+                    SpicyButton(t("Paste"), onClick = {
                         val pasted = context.getSystemService(ClipboardManager::class.java)?.primaryClip
                             ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
                         val shared = CustomLyricsSource.fromShare(pasted)
-                        if (shared == null) viewModel.showMessage("The clipboard has no shared source in it.") else edit(shared)
+                        if (shared == null) viewModel.showMessage(t("The clipboard has no shared source in it.")) else edit(shared)
                     })
-                    SpicyButton("Add", onClick = { edit(CustomLyricsSource(CustomLyricsSource.newId(), "", "")) })
+                    SpicyButton(t("Add"), onClick = { edit(CustomLyricsSource(CustomLyricsSource.newId(), "", "")) })
                 }
             }
         }
@@ -168,7 +168,7 @@ private fun CustomSourceEditor(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(SpicySpacing.S2)) {
             Text(
-                if (saved) "Edit source" else "New source",
+                if (saved) t("Edit source") else t("New source"),
                 style = SpicyType.Body.copy(fontWeight = FontWeight.SemiBold),
                 modifier = Modifier.weight(1f),
             )
@@ -176,39 +176,39 @@ private fun CustomSourceEditor(
                 SpicyIconButton(onClick = {
                     context.getSystemService(ClipboardManager::class.java)
                         ?.setPrimaryClip(ClipData.newPlainText("Spicy Lyrics Mobile source", CustomLyricsSource.share(draft())))
-                    viewModel.showMessage("Copied, without header values.")
+                    viewModel.showMessage(t("Copied, without header values."))
                 }) {
-                    Icon(Icons.Rounded.ContentCopy, "Copy to share", tint = SpicyColors.TextPrimary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.ContentCopy, t("Copy to share"), tint = SpicyColors.TextPrimary, modifier = Modifier.size(18.dp))
                 }
                 if (confirmDelete) {
-                    SpicyButton("Confirm", brand = SpicyColors.StatusDanger.copy(alpha = 1f), horizontalPadding = 10.dp, onClick = {
+                    SpicyButton(t("Confirm"), brand = SpicyColors.StatusDanger.copy(alpha = 1f), horizontalPadding = 10.dp, onClick = {
                         viewModel.removeCustomSource(source.id)
                         onClose()
                     })
                 } else {
                     SpicyIconButton(onClick = { confirmDelete = true }) {
-                        Icon(Icons.Rounded.Delete, "Delete source", tint = SpicyColors.TextPrimary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Delete, t("Delete source"), tint = SpicyColors.TextPrimary, modifier = Modifier.size(18.dp))
                     }
                 }
             }
         }
-        Field("Name") {
-            SpicyTextField(name, { name = it }, placeholder = "My lyrics API", modifier = Modifier.fillMaxWidth())
+        Field(t("Name")) {
+            SpicyTextField(name, { name = it }, placeholder = t("My lyrics API"), modifier = Modifier.fillMaxWidth())
         }
-        Field("Address", "Fill in ${CustomLyricsSource.PLACEHOLDERS.joinToString { "{$it}" }}. Duration is in seconds.") {
+        Field(t("Address"), t("Fill in %s. Duration is in seconds.", CustomLyricsSource.PLACEHOLDERS.joinToString { "{$it}" })) {
             SpicyTextField(url, { url = it; result = null }, placeholder = "https://…?title={title}&artist={artist}", modifier = Modifier.fillMaxWidth(), multiline = true)
         }
-        Field("Where the lyrics are", "For JSON answers. Empty tries the usual fields.") {
+        Field(t("Where the lyrics are"), t("For JSON answers. Empty tries the usual fields.")) {
             SpicyTextField(path, { path = it; result = null }, placeholder = "e.g. data.lyrics[0].ttml", modifier = Modifier.fillMaxWidth())
         }
-        Field("Headers", "One per line. Values stay on this phone: backups and shared copies leave them out.") {
+        Field(t("Headers"), t("One per line. Values stay on this phone: backups and shared copies leave them out.")) {
             SpicyTextField(headers, { headers = it }, placeholder = "Authorization: Bearer …", modifier = Modifier.fillMaxWidth(), multiline = true)
         }
         result?.let { TestStrip(it) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(SpicySpacing.S2)) {
-            SpicyModalButton("Cancel", onClick = onClose, style = SpicyButtonStyle.Quiet)
+            SpicyModalButton(t("Cancel"), onClick = onClose, style = SpicyButtonStyle.Quiet)
             Spacer(Modifier.weight(1f))
-            SpicyModalButton(if (testing) "Testing…" else "Test", onClick = {
+            SpicyModalButton(if (testing) t("Testing…") else t("Test"), onClick = {
                 if (testing) return@SpicyModalButton
                 val candidate = valid() ?: return@SpicyModalButton
                 testing = true
@@ -220,7 +220,7 @@ private fun CustomSourceEditor(
                     }
                 }
             })
-            SpicyModalButton("Save", style = SpicyButtonStyle.Primary, onClick = {
+            SpicyModalButton(t("Save"), style = SpicyButtonStyle.Primary, onClick = {
                 val candidate = valid() ?: return@SpicyModalButton
                 viewModel.saveCustomSource(candidate)
                 onClose()
@@ -233,9 +233,9 @@ private fun CustomSourceEditor(
 @Composable
 private fun Field(label: String, note: String? = null, field: @Composable () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary, fontWeight = FontWeight.Medium))
+        Text(t(label), style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary, fontWeight = FontWeight.Medium))
         field()
-        note?.let { Text(it, style = DescriptionStyle) }
+        note?.let { Text(t(it), style = DescriptionStyle) }
     }
 }
 

@@ -1,5 +1,32 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.t
+
+import android.content.ClipData
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Sensors
+import kotlinx.coroutines.flow.MutableStateFlow
+import com.tx24.spicyplayer.LyricsActivity
+import com.tx24.spicyplayer.playback.SpotifyCloudStatus
+import com.tx24.spicyplayer.playback.remote.RemoteAction
+import com.tx24.spicyplayer.playback.remote.RemoteCommandPayload
+import com.tx24.spicyplayer.playback.remote.RemoteConfigPayload
+import com.tx24.spicyplayer.playback.remote.RemoteMessage
+import com.tx24.spicyplayer.playback.remote.RemoteMessageType
+import com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils
+import com.tx24.spicyplayer.network.data.spotify.SpotifyWebApiClient
+import com.tx24.spicyplayer.playback.remote.NetworkUtils
+import com.tx24.spicyplayer.ui.components.QrCodeView
 import android.os.Build
 import com.tx24.spicyplayer.ui.components.SpicyGlyphs
 import com.tx24.spicyplayer.ui.components.drawBrandRamp
@@ -148,6 +175,14 @@ import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.KeyOff
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.WbSunny
+import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.WaterDrop
+import androidx.compose.material.icons.rounded.CloudSync
+import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -175,6 +210,7 @@ import com.tx24.spicyplayer.lyrics.LyricsState
 import com.tx24.spicyplayer.lyrics.spicy.SyllableMerge
 import com.tx24.spicyplayer.lyrics.spicy.models.LyricsType
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -328,13 +364,20 @@ internal fun LyricsContent(state: PlayerUiState, viewModel: ExternalPlaybackView
             value = settings.rendererStyle.name,
             options = RendererStyle.entries.map { it.name },
             labels = RendererStyle.entries.map { it.label },
-            onChange = { settings.rendererStyle = RendererStyle.valueOf(it) },
+            onChange = {
+                val style = RendererStyle.valueOf(it)
+                settings.rendererStyle = style
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(rendererStyle = style.name))
+            },
         )
     }
     ToggleRow(
         label = "Fade Away Previous Lines",
         checked = settings.minimalLyricsMode,
-        onCheckedChange = { settings.minimalLyricsMode = it },
+        onCheckedChange = {
+            settings.minimalLyricsMode = it
+            LyricsActivity.dispatchConfigChange(RemoteConfigPayload(minimalLyricsMode = it))
+        },
         description = "Hides sung lyrics lines.",
         icon = Icons.Rounded.VisibilityOff,
         searchDescription = "Minimal Lyrics Mode. Hides sung lyrics lines.",
@@ -343,7 +386,7 @@ internal fun LyricsContent(state: PlayerUiState, viewModel: ExternalPlaybackView
         label = "Original word motion",
         checked = settings.originalWordMotion,
         onCheckedChange = { settings.originalWordMotion = it },
-        description = "The desktop amount of grow and lift on sung words. Off: ${AppSettings.WORD_MOTION_BOOST}×, which reads better on a phone.",
+        description = t("The desktop amount of grow and lift on sung words. Off: %s×, which reads better on a phone.", AppSettings.WORD_MOTION_BOOST),
         icon = Icons.Rounded.Height,
     )
     SettingsSection("Text") {
@@ -358,7 +401,10 @@ internal fun LyricsContent(state: PlayerUiState, viewModel: ExternalPlaybackView
                 value = settings.lyricsSizePortrait,
                 range = LYRICS_SIZE_RANGE,
                 step = 5,
-                onValueChange = { settings.lyricsSizePortrait = it },
+                onValueChange = {
+                    settings.lyricsSizePortrait = it
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(lyricsSizePortrait = it))
+                },
                 default = 100,
                 unit = "%",
             )
@@ -374,7 +420,10 @@ internal fun LyricsContent(state: PlayerUiState, viewModel: ExternalPlaybackView
                 value = settings.lyricsSizeLandscape,
                 range = LYRICS_SIZE_RANGE,
                 step = 5,
-                onValueChange = { settings.lyricsSizeLandscape = it },
+                onValueChange = {
+                    settings.lyricsSizeLandscape = it
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(lyricsSizeLandscape = it))
+                },
                 default = 100,
                 unit = "%",
             )
@@ -493,15 +542,15 @@ private fun LyricsFontRows(settings: AppSettings) {
         )
     }
     SettingRow(
-        label = "Font File",
+        label = t("Font File"),
         description = when {
-            failed -> "That file isn't a font Android can read. Pick a .ttf or .otf file."
-            hasCustom -> "Using ${settings.customFontName}."
-            else -> "Pick a .ttf or .otf font file from your phone."
+            failed -> t("That file isn't a font Android can read. Pick a .ttf or .otf file.")
+            hasCustom -> t("Using %s.").format(settings.customFontName ?: "")
+            else -> t("Pick a .ttf or .otf font file from your phone.")
         },
         icon = Icons.Rounded.FolderOpen,
     ) {
-        SpicyButton(if (hasCustom) "Change" else "Choose", onClick = pick)
+        SpicyButton(if (hasCustom) t("Change") else t("Choose"), onClick = pick)
     }
 }
 
@@ -515,7 +564,7 @@ private val FONT_MIME_TYPES = arrayOf(
 internal fun ScrollSyncContent(state: PlayerUiState, viewModel: ExternalPlaybackViewModel, settings: AppSettings) {
     SettingRow(
         label = "Lyric delay",
-        description = "Saved for ${state.outputLabel}. Move it right if the lyrics run ahead of the song.",
+        description = t("Saved for %s. Move it right if the lyrics run ahead of the song.", state.outputLabel),
         icon = Icons.Rounded.Timer,
         stacked = true,
     ) {
@@ -812,10 +861,31 @@ internal fun NowPlayingContent(settings: AppSettings, viewModel: ExternalPlaybac
     ToggleRow(
         label = "Up Next",
         checked = settings.nextUpCard,
-        onCheckedChange = { settings.nextUpCard = it },
+        onCheckedChange = {
+            settings.nextUpCard = it
+            LyricsActivity.dispatchConfigChange(RemoteConfigPayload(nextUpCard = it))
+        },
         description = "In the last 30 seconds of a song, show the one queued next at the bottom of the lyrics.",
         icon = Icons.Rounded.SkipNext,
     )
+    if (settings.nextUpCard) {
+        SettingRow(
+            label = "Up Next size",
+            stacked = true,
+        ) {
+            SpicyBipolarSlider(
+                value = settings.nextUpScalePercent,
+                range = 50..300,
+                step = 5,
+                onValueChange = {
+                    settings.nextUpScalePercent = it
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(nextUpScalePercent = it))
+                },
+                default = 100,
+                unit = "%",
+            )
+        }
+    }
     ToggleRow(
         label = "Animated Cover",
         checked = settings.animatedCover && !settings.lowPerformance,
@@ -907,17 +977,17 @@ internal fun NowPlayingContent(settings: AppSettings, viewModel: ExternalPlaybac
         )
         val showsCanvas = StageArt.Canvas in settings.stageArt || StageArt.Canvas in settings.bigCoverArt
         ToggleRow(
-            label = "Blurred Canvas Behind",
+            label = t("Blurred Canvas Behind"),
             checked = settings.canvasBackdrop && showsCanvas && !settings.lowPerformance,
             onCheckedChange = { settings.canvasBackdrop = it },
             description = if (showsCanvas) {
-                "While the stage or the big cover shows a Canvas, the background becomes it, blurred."
+                t("While the stage or the big cover shows a Canvas, the background becomes it, blurred.")
             } else {
-                "Needs Spotify Canvas on the cover stage or the big cover."
+                t("Needs Spotify Canvas on the cover stage or the big cover.")
             },
             icon = Icons.Rounded.BlurOn,
             enabled = showsCanvas && !settings.lowPerformance,
-            searchDescription = "While the stage or the big cover shows a Canvas, the background becomes it, blurred.",
+            searchDescription = t("While the stage or the big cover shows a Canvas, the background becomes it, blurred."),
         )
         SettingRow(
             label = "Pause with the Music",
@@ -1076,6 +1146,13 @@ internal fun ControlsContent(settings: AppSettings) {
                 description = "Show its own button for choosing this song's lyrics source. It's always in quick settings.",
                 icon = SpicyGlyphs.Source,
             )
+            ToggleRow(
+                label = t("Standby Clock Button"),
+                checked = settings.smartDisplayButton,
+                onCheckedChange = { settings.smartDisplayButton = it },
+                description = "Show the button that toggles the 24/7 smart standby clock and weather display.",
+                icon = Icons.Rounded.Schedule,
+            )
         }
     }
 }
@@ -1130,6 +1207,1069 @@ internal fun ThemeContent(settings: AppSettings) {
 }
 
 @Composable
+internal fun SmartDisplayContent(
+    state: PlayerUiState,
+    viewModel: ExternalPlaybackViewModel,
+    settings: AppSettings,
+    onToggleAmbient: () -> Unit = {},
+    onOpenConnectModal: () -> Unit = {},
+) {
+    SettingsSection(t("Lyrics Screen Clock")) {
+        ToggleRow(
+            label = t("Show Clock on Lyrics Screen"),
+            checked = settings.showClockOnLyricsScreen,
+            onCheckedChange = {
+                settings.showClockOnLyricsScreen = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(showClockOnLyricsScreen = it))
+            },
+            description = t("Display a permanent clock and weather header on the now playing and lyrics screen."),
+            icon = Icons.Rounded.Schedule,
+        )
+        ToggleRow(
+            label = t("Show Battery Indicator"),
+            checked = settings.showBatteryIndicator,
+            onCheckedChange = {
+                settings.showBatteryIndicator = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(showBatteryIndicator = it))
+            },
+            description = t("Show battery percentage and charging status on lyrics screen and screensaver."),
+            icon = Icons.Rounded.BatteryChargingFull,
+        )
+        if (settings.showBatteryIndicator) {
+            SettingRow(
+                label = t("Battery Indicator Size"),
+                description = t("Adjust the size of the battery indicator on lyrics screen and screensaver."),
+                icon = Icons.Rounded.FormatSize,
+                stacked = true,
+            ) {
+                SpicyBipolarSlider(
+                    value = settings.batteryIndicatorScale,
+                    range = 50..200,
+                    step = 5,
+                    onValueChange = {
+                        settings.batteryIndicatorScale = it
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(batteryIndicatorScale = it))
+                    },
+                    default = 100,
+                    unit = "%",
+                )
+            }
+        }
+        ToggleRow(
+            label = t("Show Weather on Clock"),
+            checked = settings.showWeatherOnLyricsScreen,
+            enabled = settings.showClockOnLyricsScreen,
+            onCheckedChange = {
+                settings.showWeatherOnLyricsScreen = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(showWeatherOnLyricsScreen = it))
+            },
+            description = t("Display local temperature and weather status next to the time."),
+            icon = Icons.Rounded.WbSunny,
+        )
+        ToggleRow(
+            label = t("12-Hour Clock"),
+            checked = settings.clock12h,
+            onCheckedChange = {
+                settings.clock12h = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(clock12h = it))
+            },
+            description = t("Turn off to use 24-hour time format."),
+            icon = Icons.Rounded.Schedule,
+        )
+        ToggleRow(
+            label = t("Show Seconds (:SS)"),
+            checked = settings.clockShowSeconds,
+            onCheckedChange = {
+                settings.clockShowSeconds = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(showSeconds = it))
+            },
+            description = t("Show ticking seconds after the time."),
+            icon = Icons.Rounded.Timer,
+        )
+        ToggleRow(
+            label = t("Show Date and Day"),
+            checked = settings.smartClockShowDate,
+            onCheckedChange = {
+                settings.smartClockShowDate = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(showDate = it))
+            },
+            description = t("Display full date and weekday under the time."),
+            icon = Icons.Rounded.Schedule,
+        )
+        ToggleRow(
+            label = t("Show Detailed Weather"),
+            checked = settings.clockShowWeatherDetails,
+            onCheckedChange = {
+                settings.clockShowWeatherDetails = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(showWeatherDetails = it))
+            },
+            description = t("Display feels-like temperature, humidity and city name."),
+            icon = Icons.Rounded.WaterDrop,
+        )
+        SettingRow(
+            label = t("Lyrics Clock Scale"),
+            description = t("Adjust the font size scale of the clock on the lyrics screen."),
+            icon = Icons.Rounded.FormatSize,
+        ) {
+            SpicySelect(
+                value = settings.clockScalePercent.toString(),
+                options = listOf("80", "90", "100", "110", "120", "130", "150", "180", "200", "250", "300", "350", "400"),
+                labels = listOf("80%", "90%", "100%", "110%", "120%", "130%", "150%", "180%", "200%", "250%", "300%", "350%", "400%"),
+                onChange = {
+                    val scale = it.toIntOrNull() ?: 100
+                    settings.clockScalePercent = scale
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(clockScalePercent = scale))
+                },
+            )
+        }
+    }
+
+    SettingsSection(t("Smart Standby Clock")) {
+        ToggleRow(
+            label = t("Standby Clock"),
+            checked = settings.smartDisplayEnabled,
+            onCheckedChange = {
+                settings.smartDisplayEnabled = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(smartDisplayEnabled = it))
+            },
+            description = t("Automatically transition to standby clock and weather after playback stops."),
+            icon = Icons.Rounded.Schedule,
+        )
+        SettingRow(
+            label = t("Standby Timeout (Seconds)"),
+            description = t("How long after music stops before entering standby clock."),
+            icon = Icons.Rounded.Timer,
+            enabled = settings.smartDisplayEnabled,
+        ) {
+            SpicySelect(
+                value = settings.smartDisplayIdleTimeoutSeconds.toString(),
+                options = listOf("5", "10", "15", "30", "60", "120", "300"),
+                labels = listOf(t("5 seconds"), t("10 seconds"), t("15 seconds"), t("30 seconds"), t("1 minute"), t("2 minutes"), t("5 minutes")),
+                onChange = {
+                    val timeout = it.toIntOrNull() ?: 15
+                    settings.smartDisplayIdleTimeoutSeconds = timeout
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(ambientIdleTimeoutSeconds = timeout))
+                },
+            )
+        }
+        SettingRow(
+            label = t("Standby Clock Scale"),
+            description = t("Adjust the size scale of the full-screen standby clock and weather."),
+            icon = Icons.Rounded.FormatSize,
+            enabled = settings.smartDisplayEnabled,
+        ) {
+            SpicySelect(
+                value = settings.ambientClockScalePercent.toString(),
+                options = listOf("80", "90", "100", "110", "120", "130", "150", "180", "200", "250", "300", "350", "400"),
+                labels = listOf("80%", "90%", "100%", "110%", "120%", "130%", "150%", "180%", "200%", "250%", "300%", "350%", "400%"),
+                onChange = {
+                    val scale = it.toIntOrNull() ?: 100
+                    settings.ambientClockScalePercent = scale
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(ambientClockScalePercent = scale))
+                },
+            )
+        }
+        ToggleRow(
+            label = t("Pixel Shift (Burn-in Protection)"),
+            checked = settings.pixelShiftEnabled,
+            onCheckedChange = {
+                settings.pixelShiftEnabled = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(pixelShiftEnabled = it))
+            },
+            description = t("Periodically shifts display elements slightly to prevent AMOLED/OLED burn-in."),
+            icon = Icons.Rounded.Visibility,
+        )
+        ToggleRow(
+            label = t("Night Mode"),
+            checked = settings.nightModeEnabled,
+            enabled = settings.smartDisplayEnabled,
+            onCheckedChange = {
+                settings.nightModeEnabled = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(nightMode = it))
+            },
+            description = t("Reduce brightness and switch to amber glow for dark environments."),
+            icon = Icons.Rounded.Bedtime,
+        )
+        SettingRow(
+            label = t("Preview Standby Clock"),
+            description = t("Immediately switch to standby clock to preview (tap anywhere to return)."),
+            icon = Icons.Rounded.Visibility,
+        ) {
+            SpicyButton(
+                text = t("Preview Now"),
+                onClick = onToggleAmbient,
+            )
+        }
+    }
+
+    SettingsSection(t("OpenWeatherMap Weather")) {
+        ToggleRow(
+            label = t("Show Real-time Weather"),
+            checked = settings.smartClockShowWeather,
+            onCheckedChange = {
+                settings.smartClockShowWeather = it
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(showWeather = it))
+            },
+            description = t("Display local weather, real-time temperature and conditions on standby clock and lyrics screen."),
+            icon = Icons.Rounded.WbSunny,
+        )
+        if (settings.smartClockShowWeather) {
+            var inputKey by remember(settings.owmApiKey) { mutableStateOf(settings.owmApiKey) }
+            var inputCity by remember(settings.owmCity) { mutableStateOf(settings.owmCity) }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SpicyTextField(
+                    inputKey,
+                    {
+                        inputKey = it
+                        settings.owmApiKey = it
+                    },
+                    onFocusLost = {
+                        inputKey = it
+                        settings.owmApiKey = it
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(owmApiKey = it))
+                    },
+                    placeholder = t("OWM API Key (Supports remote push from phone)"),
+                    password = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SpicyTextField(
+                    inputCity,
+                    {
+                        inputCity = it
+                        settings.owmCity = it
+                    },
+                    onFocusLost = {
+                        inputCity = it
+                        settings.owmCity = it
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(owmCity = it))
+                    },
+                    placeholder = t("City Name (e.g. Beijing, leave blank for IP location)"),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            ToggleRow(
+                label = t("Celsius (°C)"),
+                checked = settings.owmUseCelsius,
+                onCheckedChange = {
+                    settings.owmUseCelsius = it
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(owmUseCelsius = it))
+                },
+                description = t("Turn off to display Fahrenheit (°F)."),
+                icon = Icons.Rounded.WbSunny,
+            )
+            SettingRow(
+                label = t("Weather Refresh Interval"),
+                description = t("Frequency of automatically updating weather from OpenWeatherMap (default 60 minutes)."),
+                icon = Icons.Rounded.Schedule,
+            ) {
+                SpicySelect(
+                    value = settings.weatherRefreshIntervalMinutes.toString(),
+                    options = listOf("15", "30", "60", "120", "180", "360"),
+                    labels = listOf(t("15 minutes"), t("30 minutes"), t("60 minutes (Default)"), t("2 hours"), t("3 hours"), t("6 hours")),
+                    onChange = {
+                        val minutes = it.toIntOrNull() ?: 60
+                        settings.weatherRefreshIntervalMinutes = minutes
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(weatherRefreshIntervalMinutes = minutes))
+                    },
+                )
+            }
+            val weather by viewModel.weather.collectAsState()
+            val weatherState by viewModel.weatherClient.weatherStateFlow.collectAsState()
+            val (weatherDotColor, weatherDotDesc) = when {
+                !settings.smartClockShowWeather -> Pair(SpicyColors.TextSecondary.copy(alpha = 0.5f), t("Disabled"))
+                weather != null -> {
+                    val w = weather!!
+                    val tempStr = if (settings.owmUseCelsius) "${w.tempC.toInt()}°C" else "${w.tempF.toInt()}°F"
+                    val sourceLabel = if (weatherState.source.contains("Open-Meteo", ignoreCase = true)) {
+                        t("Open-Meteo (Fallback)")
+                    } else if (weatherState.source.contains("OpenWeatherMap", ignoreCase = true)) {
+                        t("OpenWeatherMap")
+                    } else weatherState.source
+                    val city = com.tx24.spicyplayer.i18n.localizedCity(w.cityName)
+                    val cond = com.tx24.spicyplayer.i18n.localizedWeather(w.description, w.condition)
+                    Pair(SpicyColors.StatusSuccess, "$city $tempStr · $cond (${t("Data Source: %s", sourceLabel)})")
+                }
+                weatherState.status == "Fetching…" -> Pair(Color(0xFFFFB300), t("Fetching weather…"))
+                else -> Pair(SpicyColors.StatusDanger, t(weatherState.error ?: t("Not connected / No data")))
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .outlinedCard(tinted = true)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(weatherDotColor),
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = t("Weather API Status"),
+                            style = SpicyType.Body.copy(fontWeight = FontWeight.SemiBold),
+                            color = SpicyColors.TextPrimary,
+                        )
+                        if (weatherState.lastFetchTimeMs > 0L) {
+                            val timeFormatter = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
+                            Text(
+                                text = "· " + t("Last updated: %s", timeFormatter.format(java.util.Date(weatherState.lastFetchTimeMs))),
+                                style = SpicyType.Caption,
+                                color = SpicyColors.TextSecondary,
+                            )
+                        }
+                    }
+                    Text(
+                        text = weatherDotDesc,
+                        style = SpicyType.Caption,
+                        color = SpicyColors.TextSecondary,
+                    )
+                }
+                SpicyButton(
+                    text = t("Fetch Weather Now"),
+                    onClick = { viewModel.fetchWeather(settings.owmApiKey, settings.owmCity, force = true) },
+                )
+            }
+        }
+    }
+
+    SettingsSection(t("Remote Collaboration & Multi-Device")) {
+        SettingRow(
+            label = t("Remote Device Role"),
+            description = t("Configure this device as a standalone player, a smart display receiver, or a remote controller."),
+            icon = Icons.Rounded.Devices,
+        ) {
+            SpicySelect(
+                value = settings.remoteRole.name,
+                options = RemoteRole.entries.map { it.name },
+                labels = RemoteRole.entries.map { it.label },
+                onChange = { settings.remoteRole = RemoteRole.valueOf(it) },
+            )
+        }
+
+        if (settings.remoteRole == RemoteRole.Sender) {
+            val remoteClient = LyricsActivity.remoteClientHolder
+            val isConnected by (remoteClient?.connected ?: MutableStateFlow(false)).collectAsState()
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = SpicySpacing.S4, vertical = SpicySpacing.S2)
+                    .outlinedCard(tinted = true)
+                    .padding(SpicySpacing.S3),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(SpicyRadii.Sm))
+                        .background(if (isConnected) SpicyColors.StatusSuccess.copy(alpha = 0.15f) else SpicyColors.StatusDanger.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isConnected) Icons.Rounded.CheckCircle else Icons.Rounded.Sensors,
+                        contentDescription = null,
+                        tint = if (isConnected) SpicyColors.StatusSuccess else SpicyColors.StatusDanger,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = if (isConnected) t("Connected to Target Display") else t("Not Connected to Display"),
+                        style = SpicyType.Body.copy(fontWeight = FontWeight.SemiBold),
+                    )
+                    Text(
+                        text = if (isConnected)
+                            "${t("Target Host:")} ${settings.remoteTargetHost}:${settings.remoteTargetPort}\n${t("Display state and settings are fully synced in real-time.")}"
+                        else if (settings.remoteTargetHost.isNotBlank())
+                            t("Connecting to %s… Make sure display receiver is active on the same Wi-Fi.", settings.remoteTargetHost)
+                        else
+                            t("Tap 'Scan or Switch Display' below to scan display devices or connect via IP."),
+                        style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary),
+                    )
+                }
+            }
+
+            SettingRow(
+                label = t("Select or Scan Display"),
+                description = if (settings.remoteTargetHost.isNotBlank()) "${t("Target Display:")} ${settings.remoteTargetHost}:${settings.remoteTargetPort}" else t("No target display connected, tap to scan"),
+                icon = Icons.Rounded.Devices,
+            ) {
+                SpicyButton(
+                    text = t("Scan or Switch Display"),
+                    onClick = onOpenConnectModal,
+                )
+            }
+            ToggleRow(
+                label = t("Remote Playback Redirection"),
+                checked = settings.remotePlaybackRedirectEnabled,
+                onCheckedChange = { enabled ->
+                    settings.remotePlaybackRedirectEnabled = enabled
+                    if (enabled) {
+                        settings.spotifyCloudSyncEnabled = false
+                    }
+                },
+                description = t("Stream local playback and lyrics to the connected display receiver.") + " " +
+                    t("Note: Spotify Web API Cloud Sync and Remote Playback Redirection are mutually exclusive."),
+                icon = Icons.Rounded.Sensors,
+            )
+        } else if (settings.remoteRole == RemoteRole.Receiver) {
+            val remoteServer = LyricsActivity.remoteServerHolder
+            val clientsCount by (remoteServer?.clientsCount ?: MutableStateFlow(0)).collectAsState()
+            val connectedClients by (remoteServer?.connectedClients ?: MutableStateFlow(emptyList())).collectAsState()
+            val localIp = remember { NetworkUtils.getLocalIpAddress() ?: "127.0.0.1" }
+
+                if (clientsCount > 0) {
+                    androidx.compose.material3.Card(
+                        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = Color(0x334CAF50)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .border(1.dp, Color(0xFF4CAF50), RoundedCornerShape(12.dp)),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF4CAF50),
+                                modifier = Modifier.size(28.dp),
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "● " + t("Connected to %d remote controller(s)", clientsCount),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color.White,
+                                )
+                                val ipList = connectedClients.distinct().joinToString(", ").ifBlank { "127.0.0.1" }
+                                Text(
+                                    text = "${t("Client IPs:")} $ipList\n${t("Supports multi-client real-time remote control, playback and config sync.")}",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFE0E0E0),
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    androidx.compose.material3.Card(
+                        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = Color(0x221E93E5)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .border(1.dp, Color(30, 147, 229, 120), RoundedCornerShape(12.dp)),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.Sensors,
+                                contentDescription = null,
+                                tint = Color(30, 147, 229),
+                                modifier = Modifier.size(28.dp),
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "○ " + t("Waiting for remote controllers to connect…"),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = Color.White,
+                                )
+                                Text(
+                                    text = t("Open Spicy Controller on your phone to discover this device, or enter IP (%s) to connect directly.", localIp),
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFCCCCCC),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                var nameInput by remember(settings.remoteDeviceName) { mutableStateOf(settings.remoteDeviceName) }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SpicyTextField(
+                        nameInput,
+                        {
+                            nameInput = it
+                            settings.remoteDeviceName = it
+                        },
+                        onFocusLost = {
+                            nameInput = it
+                            settings.remoteDeviceName = it
+                            LyricsActivity.dispatchConfigChange(RemoteConfigPayload(remoteDeviceName = it))
+                        },
+                        placeholder = t("Display Broadcast Name (e.g. Living Room Display)"),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                SettingRow(
+                    label = t("Display Local Address"),
+                    description = "${t("IP Address:")} $localIp  ${t("Port:")} ${settings.remoteServerPort}\n${t("Phones running Spicy Controller can auto-discover this device or connect via IP directly.")}",
+                    icon = Icons.Rounded.Link,
+                )
+                ToggleRow(
+                    label = t("Remote Playback Redirection"),
+                    checked = settings.remotePlaybackRedirectEnabled,
+                    onCheckedChange = { enabled ->
+                        settings.remotePlaybackRedirectEnabled = enabled
+                        if (enabled) {
+                            settings.spotifyCloudSyncEnabled = false
+                            LyricsActivity.dispatchConfigChange(RemoteConfigPayload(spotifyCloudSyncEnabled = false))
+                        }
+                    },
+                    description = t("Stream playback and lyrics from connected phone controller to this display.") + " " +
+                        t("Note: Spotify Web API Cloud Sync and Remote Playback Redirection are mutually exclusive."),
+                    icon = Icons.Rounded.Sensors,
+                )
+            }
+        }
+
+    SettingsSection(t("Spotify Web API Cloud Sync")) {
+        ToggleRow(
+            label = t("Enable Spotify Cloud Sync"),
+            checked = settings.spotifyCloudSyncEnabled,
+            onCheckedChange = { enabled ->
+                settings.spotifyCloudSyncEnabled = enabled
+                if (enabled) {
+                    settings.remotePlaybackRedirectEnabled = false
+                }
+                LyricsActivity.dispatchConfigChange(RemoteConfigPayload(spotifyCloudSyncEnabled = enabled))
+            },
+            description = t("Fetch playback state and lyrics directly via Spotify Web API without local media player.") + " " +
+                t("Note: Spotify Web API Cloud Sync and Remote Playback Redirection are mutually exclusive."),
+            icon = Icons.Rounded.CloudSync,
+        )
+        if (settings.spotifyCloudSyncEnabled) {
+            var tokenInput by remember(settings.spotifyRefreshToken) { mutableStateOf(settings.spotifyRefreshToken) }
+            var clientIdInput by remember(settings.spotifyClientId) { mutableStateOf(settings.spotifyClientId) }
+            var clientSecretInput by remember(settings.spotifyClientSecret) { mutableStateOf(settings.spotifyClientSecret) }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SpicyTextField(
+                    clientIdInput,
+                    {
+                        clientIdInput = it
+                        settings.spotifyClientId = it
+                    },
+                    onFocusLost = {
+                        clientIdInput = it
+                        settings.spotifyClientId = it
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(spotifyClientId = it))
+                    },
+                    placeholder = t("Spotify Client ID (Optional, used with Secret)"),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SpicyTextField(
+                    clientSecretInput,
+                    {
+                        clientSecretInput = it
+                        settings.spotifyClientSecret = it
+                    },
+                    onFocusLost = {
+                        clientSecretInput = it
+                        settings.spotifyClientSecret = it
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(spotifyClientSecret = it))
+                    },
+                    placeholder = t("Spotify Client Secret (Optional)"),
+                    password = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SpicyTextField(
+                    tokenInput,
+                    {
+                        tokenInput = it
+                        settings.spotifyRefreshToken = it
+                    },
+                    onFocusLost = {
+                        tokenInput = it
+                        settings.spotifyRefreshToken = it
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(spotifyRefreshToken = it))
+                    },
+                    placeholder = t("Spotify Refresh Token (Supports remote push from controller)"),
+                    password = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            val cloudManager by viewModel.cloudSpotifyManagerFlow.collectAsState()
+            val spotifyStatus by (cloudManager?.status ?: MutableStateFlow(SpotifyCloudStatus.DISABLED)).collectAsState()
+            val spotifyMsg by (cloudManager?.statusMessage ?: MutableStateFlow(if (settings.spotifyCloudSyncEnabled) t("Connecting / Refreshing token…") else t("Disabled"))).collectAsState()
+            val spotifyLastSync by (cloudManager?.lastSyncTimeMs ?: MutableStateFlow(0L)).collectAsState()
+            val spotifyPlayback by (cloudManager?.playback ?: MutableStateFlow(null)).collectAsState()
+
+            val (spotifyDotColor, spotifyDotDesc) = when {
+                !settings.spotifyCloudSyncEnabled -> Pair(SpicyColors.TextSecondary.copy(alpha = 0.5f), t("Disabled"))
+                spotifyStatus == SpotifyCloudStatus.ACTIVE_PLAYBACK -> {
+                    val title = spotifyPlayback?.track?.title ?: ""
+                    val artist = spotifyPlayback?.track?.artist ?: ""
+                    Pair(SpicyColors.StatusSuccess, t("Active Playback: %s", if (title.isNotBlank()) "$title · $artist" else "Spotify"))
+                }
+                spotifyStatus == SpotifyCloudStatus.NO_PLAYBACK -> Pair(SpicyColors.StatusSuccess, t("Connected (Idle, no active device)"))
+                spotifyStatus == SpotifyCloudStatus.CONNECTING -> Pair(Color(0xFFFFB300), t("Connecting / Refreshing token…"))
+                else -> Pair(SpicyColors.StatusDanger, t(spotifyMsg))
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .outlinedCard(tinted = true)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(spotifyDotColor),
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = t("Spotify Web API Status"),
+                            style = SpicyType.Body.copy(fontWeight = FontWeight.SemiBold),
+                            color = SpicyColors.TextPrimary,
+                        )
+                        if (spotifyLastSync > 0L) {
+                            val timeFormatter = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
+                            Text(
+                                text = "· " + t("Last sync: %s", timeFormatter.format(java.util.Date(spotifyLastSync))),
+                                style = SpicyType.Caption,
+                                color = SpicyColors.TextSecondary,
+                            )
+                        }
+                    }
+                    Text(
+                        text = spotifyDotDesc,
+                        style = SpicyType.Caption,
+                        color = SpicyColors.TextSecondary,
+                    )
+                }
+                SpicyButton(
+                    text = t("Diagnose / Reconnect"),
+                    onClick = {
+                        settings.spotifyAccessToken = ""
+                        cloudManager?.start()
+                        cloudManager?.triggerImmediatePoll()
+                    },
+                )
+            }
+
+            SettingRow(
+                label = t("Spotify Sync Interval"),
+                description = t("Frequency of polling playback state from Spotify Web API (default 5 seconds)."),
+                icon = Icons.Rounded.Schedule,
+            ) {
+                SpicySelect(
+                    value = settings.spotifySyncIntervalSeconds.toString(),
+                    options = listOf("1", "2", "3", "5", "8", "10", "15"),
+                    labels = listOf(
+                        t("1 second (High API Usage)"),
+                        t("2 seconds (Fast)"),
+                        t("3 seconds"),
+                        t("5 seconds (Default / Recommended)"),
+                        t("8 seconds (Balanced / Safe)"),
+                        t("10 seconds (Power & Quota Save)"),
+                        t("15 seconds"),
+                    ),
+                    onChange = {
+                        val seconds = it.toIntOrNull() ?: 5
+                        settings.spotifySyncIntervalSeconds = seconds
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(spotifySyncIntervalSeconds = seconds))
+                    },
+                )
+            }
+
+            var showQrSection by remember { mutableStateOf(false) }
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val coroutineScope = rememberCoroutineScope()
+
+            var useDeepLinkScheme by remember { mutableStateOf(true) }
+            val redirectUri = if (useDeepLinkScheme) {
+                SpotifyAuthUtils.DEEP_LINK_REDIRECT
+            } else {
+                "http://127.0.0.1:${settings.remoteServerPort}/callback"
+            }
+            val authUrl = remember(settings.spotifyClientId, redirectUri) {
+                if (settings.spotifyClientId.isNotBlank()) {
+                    SpotifyAuthUtils.buildAuthorizeUrl(settings.spotifyClientId, redirectUri)
+                } else ""
+            }
+
+            SettingRow(
+                label = t("QR Code and Auth Link Login"),
+                description = t("Display mobile QR code, direct auth URL, or paste auth Code manually."),
+                icon = Icons.Rounded.QrCode2,
+            ) {
+                SpicyButton(
+                    text = if (showQrSection) t("Collapse Login Guide") else t("QR Code / Link Auth"),
+                    onClick = {
+                        if (settings.spotifyClientId.isBlank()) {
+                            Toast.makeText(context, t("Please enter Spotify Client ID above first"), Toast.LENGTH_SHORT).show()
+                        } else {
+                            showQrSection = !showQrSection
+                        }
+                    },
+                )
+            }
+
+            if (showQrSection && authUrl.isNotBlank()) {
+                var manualInput by remember { mutableStateOf("") }
+                var isExchanging by remember { mutableStateOf(false) }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0x33000000))
+                        .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(16.dp))
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    androidx.compose.material3.Card(
+                        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = Color(30, 147, 229, 30)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, Color(30, 147, 229, 100), RoundedCornerShape(12.dp)),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "💡 " + t("Spotify Developer Dashboard Setup:"),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(30, 147, 229),
+                            )
+                            Text(
+                                text = t("Spotify security policy restricts local HTTP URIs. Please add both URIs to Redirect URIs in Developer Dashboard:"),
+                                fontSize = 11.sp,
+                                color = Color(210, 210, 210),
+                            )
+
+                            // URI 1: spicyremote://callback
+                            val deepLinkUri = SpotifyAuthUtils.DEEP_LINK_REDIRECT
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (useDeepLinkScheme) Color(30, 147, 229, 60) else Color.Black.copy(alpha = 0.4f))
+                                    .border(1.dp, if (useDeepLinkScheme) Color(30, 147, 229) else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        useDeepLinkScheme = true
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                        clipboard?.setPrimaryClip(ClipData.newPlainText("Redirect URI", deepLinkUri))
+                                        Toast.makeText(context, t("Copied %s to clipboard", "spicyremote://callback"), Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "$deepLinkUri (" + t("Recommended: Phone & Controller wake-up") + ")",
+                                        fontSize = 11.sp,
+                                        color = Color.White,
+                                        fontWeight = if (useDeepLinkScheme) FontWeight.Bold else FontWeight.Normal,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    )
+                                }
+                                androidx.compose.material3.Icon(
+                                    Icons.Rounded.ContentCopy,
+                                    contentDescription = t("Copy"),
+                                    tint = Color(30, 147, 229),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+
+                            // URI 2: 127.0.0.1
+                            val localUri = "http://127.0.0.1:${settings.remoteServerPort}/callback"
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (!useDeepLinkScheme) Color(30, 147, 229, 60) else Color.Black.copy(alpha = 0.4f))
+                                    .border(1.dp, if (!useDeepLinkScheme) Color(30, 147, 229) else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        useDeepLinkScheme = false
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                        clipboard?.setPrimaryClip(ClipData.newPlainText("Redirect URI", localUri))
+                                        Toast.makeText(context, t("Copied %s to clipboard", "127.0.0.1"), Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "$localUri (" + t("Display Local Browser") + ")",
+                                        fontSize = 11.sp,
+                                        color = Color.White,
+                                        fontWeight = if (!useDeepLinkScheme) FontWeight.Bold else FontWeight.Normal,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    )
+                                }
+                                androidx.compose.material3.Icon(
+                                    Icons.Rounded.ContentCopy,
+                                    contentDescription = t("Copy"),
+                                    tint = Color(30, 147, 229),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+
+                            if (!useDeepLinkScheme) {
+                                var portInput by remember(settings.remoteServerPort) { mutableStateOf(settings.remoteServerPort.toString()) }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = t("Custom Port:"),
+                                        fontSize = 11.sp,
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                    SpicyTextField(
+                                        portInput,
+                                        {
+                                            portInput = it
+                                            val p = it.toIntOrNull()
+                                            if (p != null && p in 1024..65535) {
+                                                settings.remoteServerPort = p
+                                            }
+                                        },
+                                        onFocusLost = {
+                                            val p = portInput.toIntOrNull()
+                                            if (p != null && p in 1024..65535) {
+                                                settings.remoteServerPort = p
+                                            } else {
+                                                portInput = settings.remoteServerPort.toString()
+                                            }
+                                        },
+                                        placeholder = "8887",
+                                        modifier = Modifier.width(90.dp),
+                                    )
+                                    Text(
+                                        text = t("(1024–65535, e.g. 8888)"),
+                                        fontSize = 10.sp,
+                                        color = Color(180, 180, 180),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = t("Method 1: Scan QR Code with Phone (Recommended)"),
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = t("Scan the QR code with phone camera or browser to authorize, automatically syncing to display:"),
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .size(190.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White)
+                            .padding(10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        QrCodeView(
+                            content = authUrl,
+                            modifier = Modifier.fillMaxSize(),
+                            sizePx = 400,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = t("Method 2: Open Auth Link in Browser"),
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SpicyButton(
+                            text = t("Open in Browser"),
+                            onClick = {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, t("Cannot open browser: %s", e.message ?: ""), Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+
+                        SpicyButton(
+                            text = t("Copy Auth Link"),
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                clipboard?.setPrimaryClip(ClipData.newPlainText("Spotify URL", authUrl))
+                                Toast.makeText(context, t("Auth link copied to clipboard"), Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = t("Method 3: Paste Callback URL or Code"),
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = t("If browser shows page cannot be opened after login, copy the full address bar URL and paste below:"),
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SpicyTextField(
+                            manualInput,
+                            { manualInput = it },
+                            placeholder = t("Paste callback URL or Code"),
+                            modifier = Modifier.weight(1f),
+                        )
+
+                        SpicyButton(
+                            text = if (isExchanging) t("Verifying…") else t("Verify & Authorize"),
+                            onClick = {
+                                val code = SpotifyAuthUtils.extractCode(manualInput)
+                                if (code.isBlank()) {
+                                    Toast.makeText(context, t("Please enter a valid callback URL or Code"), Toast.LENGTH_SHORT).show()
+                                    return@SpicyButton
+                                }
+
+                                if (settings.remoteRole == RemoteRole.Sender) {
+                                    LyricsActivity.remoteClientHolder?.sendMessage(
+                                        RemoteMessage(
+                                            type = RemoteMessageType.COMMAND,
+                                            command = RemoteCommandPayload(
+                                                action = RemoteAction.SPOTIFY_AUTH_CODE,
+                                                valueString = code,
+                                            ),
+                                        )
+                                    )
+                                }
+
+                                isExchanging = true
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    val client = SpotifyWebApiClient()
+                                    val secret = settings.spotifyClientSecret.ifBlank { null }
+                                    val res = client.exchangeAuthCode(settings.spotifyClientId, secret ?: "", code, redirectUri)
+                                        ?: client.exchangeAuthCode(settings.spotifyClientId, secret ?: "", code, SpotifyAuthUtils.DEEP_LINK_REDIRECT)
+                                        ?: client.exchangeAuthCode(settings.spotifyClientId, secret ?: "", code, SpotifyAuthUtils.getLocalhostRedirect(settings.remoteServerPort))
+                                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                        isExchanging = false
+                                        if (res != null && !res.refreshToken.isNullOrBlank()) {
+                                            settings.spotifyAccessToken = ""
+                                            settings.spotifyRefreshToken = res.refreshToken ?: ""
+                                            settings.spotifyAccessToken = res.accessToken
+                                            tokenInput = res.refreshToken ?: ""
+                                            settings.spotifyCloudSyncEnabled = true
+                                            showQrSection = false
+                                            if (settings.remoteRole == RemoteRole.Sender) {
+                                                LyricsActivity.remoteClientHolder?.sendMessage(
+                                                    RemoteMessage(
+                                                        type = RemoteMessageType.CONFIG_PUSH,
+                                                        config = com.tx24.spicyplayer.playback.remote.RemoteConfigPayload(
+                                                            spotifyRefreshToken = res.refreshToken,
+                                                            spotifyCloudSyncEnabled = true,
+                                                        ),
+                                                    )
+                                                )
+                                            }
+                                            Toast.makeText(context, t("Spotify Authorization Successful!"), Toast.LENGTH_LONG).show()
+                                        } else {
+                                            if (settings.remoteRole == RemoteRole.Sender) {
+                                                Toast.makeText(context, t("Sent auth code to display for token exchange!"), Toast.LENGTH_LONG).show()
+                                            } else {
+                                                Toast.makeText(context, t("Token exchange failed, please check Client Secret or Code"), Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 internal fun DeviceContent(settings: AppSettings) {
     ToggleRow(
         label = "Smoother motion",
@@ -1172,9 +2312,9 @@ internal fun DeviceContent(settings: AppSettings) {
             SettingsPage.FloatingLyrics,
             SpicyGlyphs.PictureInPicture,
             when {
-                !supported -> "Not available on this phone"
-                settings.autoPip -> "Opens when you leave the app · ${settings.pipShape.name}"
-                else -> "Off"
+                !supported -> t("Not available on this phone")
+                settings.autoPip -> t("Opens when you leave the app · %s", t(settings.pipShape.label))
+                else -> t("Off")
             },
         )
     }
@@ -1336,9 +2476,11 @@ internal fun SourcesContent(state: PlayerUiState, viewModel: ExternalPlaybackVie
     val names = state.sourceDescriptors.associate { it.id to it.displayName }
     Searchable("Sources", "Priority", "Order", "Providers", *ranking.origins.map { it.displayName }.toTypedArray()) {
         Text(
-            "Each source is where lyrics come from; higher sources win when the timing is as good. Tap one to pick the services " +
-                "that fetch it and the sync types it may give. Services that haven't said any app may use them say what they send " +
-                "before they're switched on.",
+            t(
+                "Each source is where lyrics come from; higher sources win when the timing is as good. Tap one to pick the services " +
+                    "that fetch it and the sync types it may give. Services that haven't said any app may use them say what they send " +
+                    "before they're switched on."
+            ),
             style = DescriptionStyle,
             modifier = Modifier.padding(start = 2.dp, end = 2.dp, bottom = SpicySpacing.S3),
         )
@@ -1673,7 +2815,7 @@ private fun SourceCard(
                 if (origin.qualities.size > 1) {
                     val off = ranking.policy.syncTypesOff[origin.id].orEmpty()
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(SpicySpacing.S2)) {
-                        RowLabel("Sync types", "Answers in a type left out don't count.", Modifier.weight(1f), icon = Icons.Rounded.Sync)
+                        RowLabel(t("Sync types"), t("Answers in a type left out don't count."), Modifier.weight(1f), icon = Icons.Rounded.Sync)
                         SpicyMultiSelect(
                             selected = origin.qualities.filter { it !in off }.map { it.name }.toSet(),
                             options = origin.qualities.map { it.name },
@@ -1701,54 +2843,88 @@ private val RankFill = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.0
 private fun LyricsOrigin.summary(ranking: SourceRanking): String {
     val off = ranking.policy.syncTypesOff[id].orEmpty()
     val types = qualities.filter { it !in off }
-    val synced = types.filter { it != RemoteLyricsQuality.PLAIN }.map { if (it == RemoteLyricsQuality.WORD_SYNCED) "word" else "line" }
-    val gives = listOfNotNull(
-        synced.takeIf { it.isNotEmpty() }?.joinToString(" and ", postfix = " synced"),
-        "unsynced".takeIf { RemoteLyricsQuality.PLAIN in types },
-    ).joinToString(", ").replaceFirstChar { it.uppercase() }.ifEmpty { "No sync type on" }
+    val hasWord = RemoteLyricsQuality.WORD_SYNCED in types
+    val hasLine = RemoteLyricsQuality.LINE_SYNCED in types
+    val hasPlain = RemoteLyricsQuality.PLAIN in types
+    val syncPart = when {
+        hasWord && hasLine -> t("Word and line synced")
+        hasWord -> t("Word synced")
+        hasLine -> t("Line synced")
+        hasPlain -> t("Unsynced")
+        else -> t("No sync type on")
+    }
+    val gives = if (hasPlain && (hasWord || hasLine)) "$syncPart, ${t("unsynced")}" else syncPart
     if (providerIds.size <= 1) return gives
-    return "$gives · ${providerIds.count { ranking.pairOn(id, it) }} of ${providerIds.size} on"
+    val activeCount = providerIds.count { ranking.pairOn(id, it) }
+    return t("%s · %d of %d on", gives, activeCount, providerIds.size)
 }
 
 private fun RemoteLyricsQuality.typeLabel() = when (this) {
-    RemoteLyricsQuality.WORD_SYNCED -> "Word"
-    RemoteLyricsQuality.LINE_SYNCED -> "Line"
-    else -> "Unsynced"
+    RemoteLyricsQuality.WORD_SYNCED -> t("Word")
+    RemoteLyricsQuality.LINE_SYNCED -> t("Line")
+    else -> t("Unsynced")
 }
 
 /** A short line on how [provider] gets [origin]'s lyrics, where that isn't plain from its name. */
 private fun providerNote(origin: LyricsOrigin, provider: String): String? = when {
-    LyricsBlends.byId(provider) != null -> "Lines from the sources above, word timing from its donors."
-    provider == "rmm_revival" -> "Relays Spicy Lyrics' API by Apple Music ID."
-    provider == "spicy_unison" -> "Spicy Lyrics' copy of Unison's lyrics, by the song's ISRC or YouTube video."
-    provider == "spicy_lyrics" && origin.id != LyricsOrigins.SPICY_COMMUNITY -> "Passed on by Spicy Lyrics' API."
-    provider == "lrc_red" && origin.id == LyricsOrigins.APPLE_MUSIC -> "Serves Apple Music's lyrics by ISRC."
-    provider == "lrcmux" -> "Passes on what it finds at ${origin.displayName}."
+    LyricsBlends.byId(provider) != null -> t("Lines from the sources above, word timing from its donors.")
+    provider == "rmm_revival" -> t("Relays Spicy Lyrics' API by Apple Music ID.")
+    provider == "spicy_unison" -> t("Spicy Lyrics' copy of Unison's lyrics, by the song's ISRC or YouTube video.")
+    provider == "spicy_lyrics" && origin.id != LyricsOrigins.SPICY_COMMUNITY -> t("Passed on by Spicy Lyrics' API.")
+    provider == "lrc_red" && origin.id == LyricsOrigins.APPLE_MUSIC -> t("Serves Apple Music's lyrics by ISRC.")
+    provider == "lrcmux" -> t("Passes on what it finds at %s.", origin.displayName)
     else -> null
 }
 
 @Composable
 internal fun AdvancedContent(state: PlayerUiState, viewModel: ExternalPlaybackViewModel, updater: UpdateViewModel, settings: AppSettings) {
-    SettingRow(
-        label = "Clear All Caches for Current Song",
-        description = "Remove all cached lyrics data for the currently playing track.",
-        icon = Icons.Rounded.DeleteSweep,
-    ) {
-        SpicyButton("Clear", onClick = viewModel::clearCurrentSongCaches)
+    SettingsSection(t("Language")) {
+        val languageCodes = listOf("system", "en", "zh")
+        val languageLabels = listOf(
+            t("Follow System (%s)", java.util.Locale.getDefault().displayName),
+            "English",
+            t("Simplified Chinese"),
+        )
+        SettingRow(
+            label = t("Language"),
+            description = t("Select application display language. Changes take effect immediately."),
+            icon = Icons.Rounded.Translate,
+        ) {
+            SpicySelect(
+                value = settings.appLanguage,
+                options = languageCodes,
+                labels = languageLabels,
+                onChange = {
+                    settings.appLanguage = it
+                    LyricsActivity.dispatchConfigChange(RemoteConfigPayload(appLanguage = it))
+                    viewModel.fetchWeather(settings.owmApiKey, settings.owmCity, force = true)
+                },
+            )
+        }
     }
-    SettingRow(
-        label = "Clear Stored Lyrics Cache",
-        description = "Delete every cached lyric and translation, then reload the current song.",
-        icon = Icons.Rounded.DeleteForever,
-    ) {
-        SpicyButton("Clear Cache", onClick = viewModel::clearStoredLyricsCache)
-    }
-    SettingRow(
-        label = "Clear Current Song from Internal State",
-        description = "Remove the current song's lyrics from the in-memory state only.",
-        icon = Icons.Rounded.Memory,
-    ) {
-        SpicyButton("Clear State", onClick = viewModel::clearCurrentSongFromMemory)
+
+    SettingsSection(t("Cache & Data")) {
+        SettingRow(
+            label = t("Clear All Caches for Current Song"),
+            description = t("Remove all cached lyrics data for the currently playing track."),
+            icon = Icons.Rounded.DeleteSweep,
+        ) {
+            SpicyButton(t("Clear"), onClick = viewModel::clearCurrentSongCaches)
+        }
+        SettingRow(
+            label = t("Clear Stored Lyrics Cache"),
+            description = t("Delete every cached lyric and translation, then reload the current song."),
+            icon = Icons.Rounded.DeleteForever,
+        ) {
+            SpicyButton(t("Clear Cache"), onClick = viewModel::clearStoredLyricsCache)
+        }
+        SettingRow(
+            label = t("Clear Current Song from Internal State"),
+            description = t("Remove the current song's lyrics from the in-memory state only."),
+            icon = Icons.Rounded.Memory,
+        ) {
+            SpicyButton(t("Clear State"), onClick = viewModel::clearCurrentSongFromMemory)
+        }
     }
     SettingsSection("Backup") {
         SettingsBackupRows(viewModel, settings)
@@ -1911,14 +3087,14 @@ private fun AttemptLine(attempt: ProviderAttempt, state: PlayerUiState) {
 }
 
 private fun RemoteLyricsQuality.label() = when (this) {
-    RemoteLyricsQuality.WORD_SYNCED -> "word synced"
-    RemoteLyricsQuality.LINE_SYNCED -> "line synced"
-    RemoteLyricsQuality.PLAIN -> "unsynced"
-    RemoteLyricsQuality.NONE -> "nothing"
+    RemoteLyricsQuality.WORD_SYNCED -> t("word synced")
+    RemoteLyricsQuality.LINE_SYNCED -> t("line synced")
+    RemoteLyricsQuality.PLAIN -> t("unsynced")
+    RemoteLyricsQuality.NONE -> t("nothing")
 }
 
 /** The source, and for a source passing on another's lyrics, where they came from: "Spicy Lyrics (Apple Music)". */
-private fun lyricsFrom(lyrics: LyricsState.Ready): String {
+internal fun lyricsFrom(lyrics: LyricsState.Ready): String {
     val origin = lyrics.source?.takeIf { it.isNotBlank() && it != lyrics.provider } ?: return lyrics.provider
     return "${lyrics.provider} (${origin})"
 }
@@ -1926,13 +3102,13 @@ private fun lyricsFrom(lyrics: LyricsState.Ready): String {
 /** One line on where the current lyrics stand. */
 internal fun lyricsSummary(lyrics: LyricsState): String = when (lyrics) {
     is LyricsState.Ready -> lyricsFrom(lyrics) + ", " + when (lyrics.lyricsType) {
-        LyricsType.Syllable -> "word synced"
-        LyricsType.Line -> "line synced"
-        LyricsType.Static -> "unsynced"
+        LyricsType.Syllable -> t("word synced")
+        LyricsType.Line -> t("line synced")
+        LyricsType.Static -> t("unsynced")
     }
-    LyricsState.Loading -> "Looking for lyrics…"
-    is LyricsState.Error -> lyrics.message
-    LyricsState.Idle -> "No lyrics yet"
+    LyricsState.Loading -> t("Looking for lyrics…")
+    is LyricsState.Error -> t(lyrics.message)
+    LyricsState.Idle -> t("No lyrics yet")
 }
 
 /**
@@ -1941,11 +3117,11 @@ internal fun lyricsSummary(lyrics: LyricsState): String = when (lyrics) {
  */
 internal fun songSummary(state: PlayerUiState): String {
     val summary = lyricsSummary(state.lyrics) +
-        if (state.songDelayMs != 0) " · ${state.songDelayMs.signed()} ms delay" else ""
+        if (state.songDelayMs != 0) " · ${t("%s ms delay", state.songDelayMs.signed())}" else ""
     if (state.lyrics !is LyricsState.Ready) return summary
     val waiting = state.providerAttempts.firstOrNull { it.outcome == ProviderAttemptOutcome.PENDING } ?: return summary
     val name = state.sourceDescriptors.firstOrNull { it.id == waiting.sourceId }?.displayName ?: waiting.sourceId
-    return "$summary · checking $name…"
+    return "$summary · ${t("checking %s…", name)}"
 }
 
 /**
@@ -1988,8 +3164,8 @@ internal fun DelayControl(valueMs: Int, onValueChange: (Int) -> Unit, enabled: B
 internal fun SongDelayRow(state: PlayerUiState, viewModel: ExternalPlaybackViewModel) {
     SettingRow(
         label = "Song delay",
-        description = if (state.localLyricsKey == null) "Play a song to give it its own delay."
-            else "Only for this song, added to the delay for ${state.outputLabel}. For lyrics timed a little off.",
+        description = if (state.localLyricsKey == null) t("Play a song to give it its own delay.")
+            else t("Only for this song, added to the delay for %s. For lyrics timed a little off.", state.outputLabel),
         icon = Icons.Rounded.MusicNote,
         stacked = true,
     ) {
@@ -2003,8 +3179,8 @@ internal fun PlayerDelayRow(state: PlayerUiState, viewModel: ExternalPlaybackVie
     val player = state.playerLabel
     SettingRow(
         label = "Player delay",
-        description = if (player == null) "Play something to give its app its own delay."
-            else "For every song from $player, added to the delay for ${state.outputLabel}.",
+        description = if (player == null) t("Play something to give its app its own delay.")
+            else t("For every song from %s, added to the delay for %s.", player, state.outputLabel),
         icon = Icons.Rounded.Apps,
         stacked = true,
     ) {

@@ -189,6 +189,7 @@ fun CompactNowPlayingHeader(
                 direction = info.direction,
                 metrics = metrics,
                 cornerFraction = { lerp(restingCorner, CompactHeaderMetrics.NOWBAR_CORNER_FRACTION, layoutP()) },
+                hasSession = info.hasSession && info.title != "Nothing playing",
                 overlay = coverOverlay,
                 modifier = Modifier
                     .layout { measurable, _ ->
@@ -434,8 +435,10 @@ internal fun HeaderMetadata(
             else -> Alignment.Start
         },
     ) {
-        MarqueeLine(shown.title, titleStyle, Color.White.copy(alpha = 0.95f), titleWidthPx, active = active)
-        ArtistsRow(shown.artists, shown.year, artistsStyle, Color.White.copy(alpha = 0.7f), artistsWidthPx, active)
+        val displayTitle = if (shown.title == "Nothing playing") com.tx24.spicyplayer.i18n.t("Nothing playing") else shown.title
+        val displayArtists = if (shown.artists == "Start playback in another app") com.tx24.spicyplayer.i18n.t("Start playback in another app") else shown.artists
+        MarqueeLine(displayTitle, titleStyle, Color.White.copy(alpha = 0.95f), titleWidthPx, active = active)
+        ArtistsRow(displayArtists, shown.year, artistsStyle, Color.White.copy(alpha = 0.7f), artistsWidthPx, active)
     }
 }
 
@@ -635,6 +638,7 @@ private fun HeaderArtwork(
     metrics: CompactHeaderMetrics,
     cornerFraction: () -> Float,
     modifier: Modifier,
+    hasSession: Boolean = true,
     overlay: (@Composable () -> Unit)? = null,
 ) {
     val latestDirection by rememberUpdatedState(direction)
@@ -648,8 +652,14 @@ private fun HeaderArtwork(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    LaunchedEffect(artwork?.fingerprint) {
-        // Keep the last cover when the player has none to show.
+    LaunchedEffect(artwork?.fingerprint, hasSession) {
+        if (!hasSession) {
+            current = null
+            incoming = null
+            slide.snapTo(0f)
+            blur.snapTo(0f)
+            return@LaunchedEffect
+        }
         val next = artwork ?: return@LaunchedEffect
         incoming = null
         slide.snapTo(0f)

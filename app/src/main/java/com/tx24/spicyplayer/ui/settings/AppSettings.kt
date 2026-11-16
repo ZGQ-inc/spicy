@@ -29,6 +29,12 @@ class AppSettings(private val prefs: SharedPreferences) {
     /** Nothing was saved yet when this was made: a new install, or one whose data was cleared. */
     val startedEmpty = prefs.all.isEmpty()
 
+    /** Flag to prevent echo loop when applying remote updates */
+    var isSyncingRemote: Boolean = false
+
+    /** Callback invoked whenever any setting value changes (key, stringValue) */
+    var onSettingChanged: ((key: String, value: String) -> Unit)? = null
+
     /** Every setting below, so [reload] can re-read them; first, so it exists when they register. */
     private val all = mutableListOf<Setting<*>>()
     // `coverStage` and `bigCoverCanvas` are only read now, by [stageArt] and [bigCoverArt], but an
@@ -38,13 +44,19 @@ class AppSettings(private val prefs: SharedPreferences) {
     ).apply { putAll(RendererStyleMigration.oldKeys) }
 
     // Before the settings below read their values.
-    init { migrateStored(prefs) }
+    init {
+        migrateStored(prefs)
+        com.tx24.spicyplayer.i18n.I18n.appLanguage = prefs.getString("appLanguage", "system") ?: "system"
+    }
 
     /** The type each setting is stored as, by key, so a restore can turn away the wrong one. */
     val storedTypes: Map<String, KClass<*>> get() = types
 
     /** Re-reads every setting from storage, after a restore wrote it behind their backs. */
-    fun reload() = all.forEach { it.reload() }
+    fun reload() {
+        all.forEach { it.reload() }
+        com.tx24.spicyplayer.i18n.I18n.appLanguage = appLanguage
+    }
 
     /** Romanized lyrics where the song has them; the floating button, not a settings row. */
     var romanize by boolean("romanize", false)
@@ -86,6 +98,7 @@ class AppSettings(private val prefs: SharedPreferences) {
     var creditsFollowLastLine by boolean("creditsFollowLastLine", false)
     var refinedCredits by boolean("refinedCredits", true)
     var nextUpCard by boolean("nextUpCard", true)
+    var nextUpScalePercent by int("nextUpScalePercent", 100, 50..300)
     /** "Translation from" and "Romanization from" in the credits. */
     var textCredits by boolean("textCredits", true)
     var backgroundPop by boolean("backgroundPop", false)
@@ -301,6 +314,49 @@ class AppSettings(private val prefs: SharedPreferences) {
     /** Pre-releases offered as updates. On by default while the app itself is one (0.x). */
     var includePrereleases by boolean("includePrereleases", BuildConfig.VERSION_NAME.startsWith("0."))
 
+    // --- Smart Ambient, OWM Weather & Standby ---
+    var smartDisplayEnabled by boolean("smartDisplayEnabled", false)
+    var smartDisplayIdleTimeoutSeconds by int("smartDisplayIdleTimeoutSeconds", 30, 5..600)
+    var smartClockShowDate by boolean("smartClockShowDate", true)
+    var smartClockShowWeather by boolean("smartClockShowWeather", true)
+    var showClockOnLyricsScreen by boolean("showClockOnLyricsScreen", false)
+    var showWeatherOnLyricsScreen by boolean("showWeatherOnLyricsScreen", false)
+    var clock12h by boolean("clock12h", false)
+    var clockShowSeconds by boolean("clockShowSeconds", false)
+    var clockShowWeatherDetails by boolean("clockShowWeatherDetails", true)
+    var clockScalePercent by int("clockScalePercent", 100, 70..400)
+    var ambientClockScalePercent by int("ambientClockScalePercent", 100, 70..400)
+    var bypassNotificationAccess by boolean("bypassNotificationAccess", false)
+    var smartDisplayButton by boolean("smartDisplayButton", false)
+    var remoteControlButton by boolean("remoteControlButton", false)
+    var owmApiKey by string("owmApiKey", "")
+    var owmCity by string("owmCity", "")
+    var owmUseCelsius by boolean("owmUseCelsius", true)
+    var weatherRefreshIntervalMinutes by int("weatherRefreshIntervalMinutes", 60, 5..1440)
+    var showBatteryIndicator by boolean("showBatteryIndicator", false)
+    var batteryIndicatorScale by int("batteryIndicatorScale", 100, 50..200)
+    var appLanguage by string("appLanguage", "system")
+    var pixelShiftEnabled by boolean("pixelShiftEnabled", true)
+    var nightModeEnabled by boolean("nightModeEnabled", false)
+    var nightModeStartHour by int("nightModeStartHour", 23, 0..23)
+    var nightModeEndHour by int("nightModeEndHour", 7, 0..23)
+
+    // --- Spotify Cloud Web API Sync ---
+    var spotifyCloudSyncEnabled by boolean("spotifyCloudSyncEnabled", false)
+    var spotifySyncIntervalSeconds by int("spotifySyncIntervalSeconds", 5, 1..60)
+    var spotifyClientId by string("spotifyClientId", "")
+    var spotifyClientSecret by string("spotifyClientSecret", "")
+    var spotifyRefreshToken by string("spotifyRefreshToken", "")
+    var spotifyAccessToken by string("spotifyAccessToken", "")
+
+    // --- Local Remote Receiver (Always ready for remote control on Display) ---
+    var remoteRole by enum("remoteRole", RemoteRole.Disabled)
+    var remotePlaybackRedirectEnabled by boolean("remotePlaybackRedirectEnabled", false)
+    var remoteServerPort by int("remoteServerPort", 8887, 1024..65535)
+    var remoteDeviceName by string("remoteDeviceName", "Spicy Display")
+    var remoteTargetHost by string("remoteTargetHost", "")
+    var remoteTargetPort by int("remoteTargetPort", 8887, 1024..65535)
+
     /** The word motion used when [originalWordMotion] is off (`RenderConfig.wordMotionBoost`). */
     val wordMotionBoost get() = if (originalWordMotion) 1f else WORD_MOTION_BOOST
 
@@ -324,15 +380,115 @@ class AppSettings(private val prefs: SharedPreferences) {
     private inline fun <T> read(get: () -> T): T? = try { get() } catch (_: ClassCastException) { null }
 
     private fun <T> setting(key: String, type: KClass<*>, load: () -> T, save: (T) -> Unit) =
-        Setting(load, save).also { all += it; types[key] = type }
+        Setting(key, type, load, save).also { all += it; types[key] = type }
 
-    private class Setting<T>(private val load: () -> T, private val save: (T) -> Unit) : ReadWriteProperty<Any?, T> {
+    private inner class Setting<T>(
+        val key: String,
+        val type: KClass<*>,
+        private val load: () -> T,
+        private val save: (T) -> Unit,
+    ) : ReadWriteProperty<Any?, T> {
         private var value by mutableStateOf(load())
-        fun reload() { value = load() }
+        fun reload() {
+            val newVal = load()
+            if (this.value != newVal) {
+                this.value = newVal
+            }
+        }
+        fun currentValue(): T = value
         override fun getValue(thisRef: Any?, property: KProperty<*>): T = value
         override fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
+            if (this.value == value) return
             this.value = value
             save(value)
+            if (key == "appLanguage") {
+                com.tx24.spicyplayer.i18n.I18n.appLanguage = value as String
+            }
+            if (!isSyncingRemote) {
+                val strVal = when (value) {
+                    is Enum<*> -> value.name
+                    else -> value.toString()
+                }
+                onSettingChanged?.invoke(key, strVal)
+            }
+        }
+    }
+
+    inline fun withRemoteSync(block: () -> Unit) {
+        val was = isSyncingRemote
+        isSyncingRemote = true
+        try {
+            block()
+        } finally {
+            isSyncingRemote = was
+        }
+    }
+
+    fun updateSettingRaw(key: String, rawValue: String) {
+        if (key == "remoteRole" || key == "remotePlaybackRedirectEnabled" || key == "remoteTargetHost" || key == "remoteTargetPort" || key == "remoteServerPort") {
+            return
+        }
+        val targetSetting = all.firstOrNull { it.key == key }
+        val kClass = types[key] ?: return
+        withRemoteSync {
+            val editor = prefs.edit()
+            when {
+                kClass == Boolean::class -> {
+                    val b = rawValue.toBooleanStrictOrNull() ?: (rawValue == "true" || rawValue == "1")
+                    editor.putBoolean(key, b)
+                }
+                kClass == Int::class -> {
+                    rawValue.toIntOrNull()?.let { editor.putInt(key, it) }
+                }
+                else -> {
+                    editor.putString(key, rawValue)
+                }
+            }
+            editor.apply()
+            targetSetting?.reload()
+        }
+    }
+
+    fun exportAllSettings(): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+        all.forEach { setting ->
+            val k = setting.key
+            if (k != "remoteRole" && k != "remotePlaybackRedirectEnabled" && k != "remoteTargetHost" && k != "remoteTargetPort" && k != "remoteServerPort") {
+                val v = setting.currentValue()
+                if (v != null) {
+                    result[k] = when (v) {
+                        is Enum<*> -> v.name
+                        else -> v.toString()
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    fun importAllSettings(settingsMap: Map<String, String>) {
+        withRemoteSync {
+            val editor = prefs.edit()
+            settingsMap.forEach { (key, rawValue) ->
+                if (key == "remoteRole" || key == "remotePlaybackRedirectEnabled" || key == "remoteTargetHost" || key == "remoteTargetPort" || key == "remoteServerPort") {
+                    return@forEach
+                }
+                val kClass = types[key]
+                when {
+                    kClass == Boolean::class -> {
+                        val b = rawValue.toBooleanStrictOrNull() ?: (rawValue == "true" || rawValue == "1")
+                        editor.putBoolean(key, b)
+                    }
+                    kClass == Int::class -> {
+                        rawValue.toIntOrNull()?.let { editor.putInt(key, it) }
+                    }
+                    else -> {
+                        editor.putString(key, rawValue)
+                    }
+                }
+            }
+            editor.apply()
+            reload()
         }
     }
 
@@ -455,6 +611,14 @@ enum class LyricsSize(val percent: Int, val label: String) {
 
 /** How far the lyrics' size goes either way, in percent of the default. */
 val LYRICS_SIZE_RANGE = 60..250
+
+enum class RemoteRole(private val labelKey: String) {
+    Disabled("Disabled (Standalone)"),
+    Receiver("Receiver (Accept remote controllers)"),
+    Sender("Sender (Remote control another device)");
+
+    val label: String get() = com.tx24.spicyplayer.i18n.t(labelKey)
+}
 
 /** The lyric delays, in the order quick settings lists them. */
 enum class DelayKind(val label: String) {

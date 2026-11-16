@@ -42,7 +42,13 @@ import com.tx24.spicyplayer.ui.theme.SpicyType
  */
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun NextUpCard(entry: QueueEntry?, shown: () -> Float, onHeight: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun NextUpCard(
+    entry: QueueEntry?,
+    shown: () -> Float,
+    onHeight: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    scale: Float = 1f,
+) {
     val animate = LocalUiAnimations.current
     Box(modifier.graphicsLayer { alpha = shown() }.onSizeChanged { onHeight(it.height) }) {
         AnimatedContent(
@@ -54,32 +60,47 @@ fun NextUpCard(entry: QueueEntry?, shown: () -> Float, onHeight: (Int) -> Unit, 
             contentKey = { it?.id },
             label = "nextUp",
         ) { shownEntry ->
-            if (shownEntry != null) NextUpBody(shownEntry, animate)
+            if (shownEntry != null) NextUpBody(shownEntry, animate, scale)
         }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NextUpBody(entry: QueueEntry, animate: Boolean) {
+private fun NextUpBody(entry: QueueEntry, animate: Boolean, scale: Float = 1f) {
     val iterations = if (animate) Int.MAX_VALUE else 0
+    val safeScale = scale.coerceIn(0.5f, 3.5f)
     // The card starts where the lyrics' lines (and the pinned credits) start: their column's inset.
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.padding(start = maxWidth * CompactHeaderMetrics.LYRICS_SIDE_INSET).widthIn(max = MAX_WIDTH),
+            Modifier
+                .padding(start = maxWidth * CompactHeaderMetrics.LYRICS_SIDE_INSET)
+                .widthIn(max = (MAX_WIDTH.value * safeScale).dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(GAP),
+            horizontalArrangement = Arrangement.spacedBy((GAP.value * safeScale).dp),
         ) {
-            QueueCover(entry, size = ART)
+            QueueCover(entry, size = (ART.value * safeScale).dp)
             Column(Modifier.weight(1f)) {
-                Text("Up Next", maxLines = 1, style = SpicyType.Footnote.copy(
-                    color = SpicyColors.TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = LABEL_SP.sp, lineHeight = 1.25.em))
+                Text(
+                    com.tx24.spicyplayer.i18n.t("Up Next"),
+                    maxLines = 1,
+                    style = SpicyType.Footnote.copy(
+                        color = SpicyColors.TextSecondary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = (LABEL_SP * safeScale).sp,
+                        lineHeight = 1.25.em,
+                    ),
+                )
                 Text(
                     entry.title,
                     maxLines = 1,
                     overflow = TextOverflow.Clip,
                     modifier = Modifier.basicMarquee(iterations = iterations),
-                    style = SpicyType.Body.copy(fontWeight = FontWeight.SemiBold, fontSize = TITLE_SP.sp, lineHeight = 1.25.em),
+                    style = SpicyType.Body.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = (TITLE_SP * safeScale).sp,
+                        lineHeight = 1.25.em,
+                    ),
                 )
                 if (entry.subtitle.isNotBlank()) {
                     Text(
@@ -87,7 +108,11 @@ private fun NextUpBody(entry: QueueEntry, animate: Boolean) {
                         maxLines = 1,
                         overflow = TextOverflow.Clip,
                         modifier = Modifier.basicMarquee(iterations = iterations),
-                        style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary, fontSize = ARTIST_SP.sp, lineHeight = 1.25.em),
+                        style = SpicyType.Caption.copy(
+                            color = SpicyColors.TextSecondary,
+                            fontSize = (ARTIST_SP * safeScale).sp,
+                            lineHeight = 1.25.em,
+                        ),
                     )
                 }
             }

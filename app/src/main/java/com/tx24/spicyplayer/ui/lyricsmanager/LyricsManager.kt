@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.lyricsmanager
 
+import com.tx24.spicyplayer.i18n.t
 import com.tx24.spicyplayer.ui.components.screenSlide
 
 import com.tx24.spicyplayer.ui.theme.SpicyMotion
@@ -148,7 +149,7 @@ fun LyricsManagerModal(
         onDismissRequest = onDismissRequest,
         backdrop = backdrop,
         modifier = modifier,
-        title = if (uploading) "Upload TTML" else "Local Lyrics DB",
+        title = if (uploading) t("Upload TTML") else t("Local Lyrics DB"),
         onBack = if (uploading) ({ uploading = false }) else null,
         // The list decodes a cover per saved song: it comes in once the pop-up is open.
         skeleton = {
@@ -214,7 +215,7 @@ private fun LibraryScreen(state: PlayerUiState, viewModel: ExternalPlaybackViewM
                 runCatching { context.contentResolver.openOutputStream(uri)?.use { it.write(ttml.toByteArray()) } != null }
                     .getOrDefault(false)
             }
-            if (!written) viewModel.showMessage("Could not retrieve TTML for this track.")
+            if (!written) viewModel.showMessage(t("Could not retrieve TTML for this track."))
         }
     }
 
@@ -227,13 +228,13 @@ private fun LibraryScreen(state: PlayerUiState, viewModel: ExternalPlaybackViewM
     SpicyTextField(
         query,
         { query = it },
-        placeholder = "Search saved lyrics…",
+        placeholder = t("Search saved lyrics…"),
         modifier = Modifier.fillMaxWidth(),
         leading = { Icon(Icons.Rounded.Search, null, tint = SpicyColors.TextTertiary, modifier = Modifier.size(18.dp)) },
     )
     Row(horizontalArrangement = Arrangement.spacedBy(SpicySpacing.S2)) {
-        ToolbarButton(Icons.Rounded.RestartAlt, "Reset TTML", ToolbarStyle.Danger, viewModel::resetTtml, Modifier.weight(1f))
-        ToolbarButton(Icons.Rounded.FileUpload, "Upload TTML", ToolbarStyle.Primary, onUpload, Modifier.weight(1f))
+        ToolbarButton(Icons.Rounded.RestartAlt, t("Reset TTML"), ToolbarStyle.Danger, viewModel::resetTtml, Modifier.weight(1f))
+        ToolbarButton(Icons.Rounded.FileUpload, t("Upload TTML"), ToolbarStyle.Primary, onUpload, Modifier.weight(1f))
     }
     FolderCard(state, viewModel)
     if (shown.isEmpty()) {
@@ -244,7 +245,7 @@ private fun LibraryScreen(state: PlayerUiState, viewModel: ExternalPlaybackViewM
         ) {
             Icon(Icons.Rounded.ErrorOutline, null, tint = SpicyColors.TextSecondary, modifier = Modifier.size(40.dp))
             Text(
-                if (needle.isEmpty()) "No lyrics saved yet" else "No matching entries",
+                if (needle.isEmpty()) t("No lyrics saved yet") else t("No matching entries"),
                 style = SpicyType.Body.copy(color = SpicyColors.TextSecondary),
             )
         }
@@ -318,11 +319,11 @@ private fun TrackRow(
                 Text(entry.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary))
             }
         }
-        RowAction(Icons.Rounded.FileDownload, "Download TTML", onClick = onExport)
+        RowAction(Icons.Rounded.FileDownload, t("Download TTML"), onClick = onExport)
         RowAction(
             Icons.Rounded.Delete,
-            if (confirmDelete) "Confirm delete" else "Delete",
-            label = if (confirmDelete) "Confirm" else null,
+            if (confirmDelete) t("Confirm delete") else t("Delete"),
+            label = if (confirmDelete) t("Confirm") else null,
             danger = confirmDelete,
             onClick = {
                 if (confirmDelete) {
@@ -365,29 +366,29 @@ private fun FolderCard(state: PlayerUiState, viewModel: ExternalPlaybackViewMode
     ) {
         Icon(Icons.Rounded.Folder, null, tint = SpicyColors.TextSecondary, modifier = Modifier.size(22.dp))
         Column(Modifier.weight(1f)) {
-            Text(folder?.name ?: "Lyrics folder", maxLines = 1, overflow = TextOverflow.Ellipsis, style = SpicyType.Body.copy(fontWeight = FontWeight.Medium))
+            Text(folder?.name ?: t("Lyrics folder"), maxLines = 1, overflow = TextOverflow.Ellipsis, style = SpicyType.Body.copy(fontWeight = FontWeight.Medium))
             Text(
                 when {
-                    folder == null -> "Read .ttml and .lrc files from a folder."
-                    state.lyricsFolderScanning -> "Reading…"
-                    else -> "${folder.files} ${if (folder.files == 1) "file" else "files"}"
+                    folder == null -> t("Read .ttml and .lrc files from a folder.")
+                    state.lyricsFolderScanning -> t("Reading…")
+                    else -> t(if (folder.files == 1) "%d file" else "%d files", folder.files)
                 },
                 maxLines = 2,
                 style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary),
             )
         }
         if (folder == null) {
-            RowAction(Icons.Rounded.Folder, "Choose a lyrics folder", label = "Choose", onClick = { pick.launch(null) })
+            RowAction(Icons.Rounded.Folder, t("Choose a lyrics folder"), label = t("Choose"), onClick = { pick.launch(null) })
         } else {
             if (state.lyricsFolderScanning) {
                 CircularProgressIndicator(Modifier.size(18.dp), color = SpicyColors.TextSecondary, strokeWidth = 2.dp)
             } else {
-                RowAction(Icons.Rounded.Refresh, "Rescan lyrics folder", onClick = { viewModel.rescanLyricsFolder(manual = true) })
+                RowAction(Icons.Rounded.Refresh, t("Rescan lyrics folder"), onClick = { viewModel.rescanLyricsFolder(manual = true) })
             }
             RowAction(
                 Icons.Rounded.LinkOff,
-                if (confirmUnlink) "Confirm unlink" else "Unlink lyrics folder",
-                label = if (confirmUnlink) "Confirm" else null,
+                if (confirmUnlink) t("Confirm unlink") else t("Unlink lyrics folder"),
+                label = if (confirmUnlink) t("Confirm") else null,
                 danger = confirmUnlink,
                 onClick = {
                     if (confirmUnlink) {
@@ -439,14 +440,14 @@ private fun UploadScreen(
             val name = withContext(Dispatchers.IO) { displayName(context, uri) }
             val extension = name?.substringAfterLast('.', "")?.lowercase()
             val ttml = if (extension != null && extension != "ttml" && extension != "lrc") {
-                viewModel.showMessage("Only .ttml and .lrc files are supported.")
+                viewModel.showMessage(t("Only .ttml and .lrc files are supported."))
                 null
             } else withContext(Dispatchers.IO) {
                 val text = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString().removePrefix("\uFEFF") } }.getOrNull()
                 when {
-                    text == null -> null.also { viewModel.showMessage("Error reading the file.") }
+                    text == null -> null.also { viewModel.showMessage(t("Error reading the file.")) }
                     extension == "lrc" || LrcConverter.isLrc(text) ->
-                        LrcConverter.toTtml(text).also { if (it == null) viewModel.showMessage("That LRC file has no timed lines.") }
+                        LrcConverter.toTtml(text).also { if (it == null) viewModel.showMessage(t("That LRC file has no timed lines.")) }
                     else -> text
                 }
             }
@@ -467,16 +468,16 @@ private fun UploadScreen(
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        ModeButton(Icons.Rounded.Storage, "Save", selected = save, enabled = !busy, Modifier.weight(1f)) { settings.ttmlUploadSaves = true }
-        ModeButton(Icons.Rounded.Schedule, "Just once", selected = !save, enabled = !busy, Modifier.weight(1f)) { settings.ttmlUploadSaves = false }
+        ModeButton(Icons.Rounded.Storage, t("Save"), selected = save, enabled = !busy, Modifier.weight(1f)) { settings.ttmlUploadSaves = true }
+        ModeButton(Icons.Rounded.Schedule, t("Just once"), selected = !save, enabled = !busy, Modifier.weight(1f)) { settings.ttmlUploadSaves = false }
     }
     Text(
-        if (save) "Store in the local DB — survives restarts" else "Apply to the current song only, until refresh",
+        if (save) t("Store in the local DB — survives restarts") else t("Apply to the current song only, until refresh"),
         style = SpicyType.Footnote.copy(color = SpicyColors.TextTertiary),
     )
     DropZone(
         busy = busy,
-        subtitle = (if (save) "Saves to Local DB for " else "Applies once to ") + songName,
+        subtitle = if (save) t("Saves to Local DB for %s", songName) else t("Applies once to %s", songName),
         onClick = { pick.launch(PICKABLE_TYPES) },
     )
 }
@@ -519,7 +520,7 @@ private fun DropZone(busy: Boolean, subtitle: String, onClick: () -> Unit) {
         }
         Spacer(Modifier.width(0.dp))
         Text(
-            if (busy) "Uploading…" else "Tap to choose a .ttml or .lrc file",
+            if (busy) t("Uploading…") else t("Tap to choose a .ttml or .lrc file"),
             style = SpicyType.Body.copy(fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center),
         )
         Text(
@@ -565,7 +566,7 @@ private fun ToolbarButton(icon: ImageVector, label: String, style: ToolbarStyle,
         horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
     ) {
         Icon(icon, null, tint = content, modifier = Modifier.size(16.dp))
-        Text(label, style = SpicyType.Caption.copy(color = content, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
+        Text(t(label), style = SpicyType.Caption.copy(color = content, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
     }
 }
 
@@ -584,7 +585,7 @@ private fun ModeButton(icon: ImageVector, label: String, selected: Boolean, enab
         horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
     ) {
         Icon(icon, null, tint = color, modifier = Modifier.size(15.dp))
-        Text(label, style = SpicyType.Caption.copy(color = color, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium))
+        Text(t(label), style = SpicyType.Caption.copy(color = color, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium))
     }
 }
 
@@ -624,7 +625,7 @@ private fun RowAction(
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Icon(icon, description, tint = tint, modifier = Modifier.size(18.dp))
-        if (label != null) Text(label, style = SpicyType.Caption.copy(color = tint, fontWeight = FontWeight.SemiBold))
+        if (label != null) Text(t(label), style = SpicyType.Caption.copy(color = tint, fontWeight = FontWeight.SemiBold))
     }
 }
 

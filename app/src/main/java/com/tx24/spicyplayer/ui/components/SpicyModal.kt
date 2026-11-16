@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.components
 
+import com.tx24.spicyplayer.i18n.t
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.geometry.Rect
@@ -364,10 +365,10 @@ private fun ModalHeader(title: String, onDismissRequest: (() -> Unit)?, onBack: 
         if (branded) {
             Column(Modifier.weight(1f).padding(top = SpicySpacing.S1), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SpicyBrandLine()
-                Text(title, style = SpicyType.Title.copy(fontSize = BrandTitleSize, lineHeight = 1.1.em, letterSpacing = (-0.025f).em))
+                Text(t(title), style = SpicyType.Title.copy(fontSize = BrandTitleSize, lineHeight = 1.1.em, letterSpacing = (-0.025f).em))
             }
         } else Text(
-            title,
+            t(title),
             modifier = Modifier.weight(1f),
             style = SpicyType.Title.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-0.01f).em),
         )
@@ -459,10 +460,10 @@ fun SpicyModalMessage(
                 contentAlignment = Alignment.Center,
             ) { icon() }
         }
-        Text(title, style = SpicyModalTitleStyle.copy(textAlign = TextAlign.Center))
+        Text(t(title), style = SpicyModalTitleStyle.copy(textAlign = TextAlign.Center))
         if (description != null) {
             Text(
-                description,
+                t(description),
                 modifier = Modifier.widthIn(max = 352.dp),
                 style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.55.em, textAlign = TextAlign.Center),
             )
@@ -476,10 +477,10 @@ fun SpicyModalHeading(title: String, subtitle: String? = null) {
     Column(verticalArrangement = Arrangement.spacedBy(SpicySpacing.S1)) {
         if (SpicyColors.brand != null) {
             SpicyBrandLine(Modifier.padding(bottom = 6.dp))
-            Text(title, style = SpicyModalTitleStyle.copy(fontSize = BrandTitleSize, fontWeight = FontWeight.Bold, lineHeight = 1.1.em, letterSpacing = (-0.025f).em))
-        } else Text(title, style = SpicyModalTitleStyle)
+            Text(t(title), style = SpicyModalTitleStyle.copy(fontSize = BrandTitleSize, fontWeight = FontWeight.Bold, lineHeight = 1.1.em, letterSpacing = (-0.025f).em))
+        } else Text(t(title), style = SpicyModalTitleStyle)
         if (subtitle != null) {
-            Text(subtitle, style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.45.em))
+            Text(t(subtitle), style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.45.em))
         }
     }
 }
@@ -578,7 +579,7 @@ fun SpicyModalButton(
             .padding(horizontal = if (style == SpicyButtonStyle.Quiet) 14.dp else 18.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = SpicyType.Body.copy(color = color, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
+        Text(t(text), style = SpicyType.Body.copy(color = color, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
     }
 }
 

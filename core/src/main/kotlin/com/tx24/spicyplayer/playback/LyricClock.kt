@@ -64,11 +64,44 @@ class LyricClock(nowMs: Long) {
     private var stalePauseAtMs = 0L
     private val votes = ArrayDeque<Vote>()
 
+    data class Transition(
+        val startPosMs: Long,
+        val targetPosMs: Long,
+        val startAtMs: Long,
+        val durationMs: Long,
+        val speed: Float,
+    )
+    @Volatile private var transition: Transition? = null
+
     val isPlaying get() = anchor.isPlaying
+
+    fun isTransitioning(): Boolean = transition != null
 
     fun positionAt(nowMs: Long): Long {
         val a = anchor
-        val elapsed = if (a.isPlaying) (nowMs - a.atMs).coerceAtLeast(0L) else 0L
+        if (!a.isPlaying) {
+            transition = null
+            return a.positionMs
+        }
+        val trans = transition
+        if (trans != null) {
+            val elapsed = (nowMs - trans.startAtMs).coerceAtLeast(0L)
+            if (elapsed >= trans.durationMs) {
+                // Transition finished: settle anchor
+                val finalPos = (trans.targetPosMs + elapsed * trans.speed).toLong().coerceAtLeast(0L)
+                anchor = Anchor(finalPos, nowMs, trans.speed, anchor.isPlaying)
+                transition = null
+                return finalPos
+            } else {
+                val t = elapsed.toFloat() / trans.durationMs
+                // Hermite smoothstep easing for smooth acceleration / deceleration
+                val smoothT = t * t * (3f - 2f * t)
+                val currentTarget = trans.targetPosMs + elapsed * trans.speed
+                val interpolated = trans.startPosMs + (currentTarget - trans.startPosMs) * smoothT
+                return interpolated.toLong().coerceAtLeast(0L)
+            }
+        }
+        val elapsed = (nowMs - a.atMs).coerceAtLeast(0L)
         return (a.positionMs + elapsed * a.speed).toLong().coerceAtLeast(0L)
     }
 
@@ -156,8 +189,29 @@ class LyricClock(nowMs: Long) {
         return if (abs(adjustment) >= MIN_MOVE_MS) adjustment else 0L
     }
 
+    /** Smoothly catches up or rewinds to [targetMs] over [durationMs]. */
+    fun smoothSeekTo(targetMs: Long, nowMs: Long, durationMs: Long = 800L) {
+        val currentPos = positionAt(nowMs)
+        transition = Transition(
+            startPosMs = currentPos,
+            targetPosMs = targetMs,
+            startAtMs = nowMs,
+            durationMs = durationMs.coerceAtLeast(100L),
+            speed = if (anchor.isPlaying) anchor.speed else 0f,
+        )
+        votes.clear()
+    }
+
+    /** Updates playing state without jumping position. */
+    fun updatePlaying(playing: Boolean, speed: Float, nowMs: Long) {
+        val currentPos = positionAt(nowMs)
+        transition = null
+        anchor = Anchor(positionMs = currentPos, atMs = nowMs, speed = speed, isPlaying = playing)
+    }
+
     /** Our own seek: the clock goes to [targetMs] now, and what came before no longer counts. */
     fun seekTo(targetMs: Long, nowMs: Long) {
+        transition = null
         anchor = anchor.copy(positionMs = targetMs, atMs = nowMs)
         biasMs = 0L
         votes.clear()
@@ -165,6 +219,7 @@ class LyricClock(nowMs: Long) {
 
     /** A new song before its first report: it starts from 0 until the player reports. */
     fun startTrack(nowMs: Long, speed: Float, playing: Boolean) {
+        transition = null
         anchor = Anchor(0L, nowMs, speed, playing)
         biasMs = 0L
         votes.clear()
@@ -172,6 +227,7 @@ class LyricClock(nowMs: Long) {
 
     /** No player: back to the start, stopped. */
     fun reset(nowMs: Long) {
+        transition = null
         anchor = Anchor(0L, nowMs, 0f, false)
         lastReport = null
         biasMs = 0L

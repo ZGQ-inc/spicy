@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.t
 import com.tx24.spicyplayer.ui.components.SpicyGlyphs
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Spellcheck
@@ -137,12 +138,12 @@ private fun AiProviderRows(state: PlayerUiState, viewModel: ExternalPlaybackView
         TranslationProvider.OpenAi -> {
             TextSettingRow("AI service address", "The service's OpenAI-compatible API (https), ending in /v1.", Icons.Rounded.Link,
                 ai.baseUrl, AiTranslationSettings.OPENAI_BASE_URL) { viewModel.setAiTranslation(ai.copy(baseUrl = it)) }
-            TextSettingRow("AI model", if (ai.model.isBlank()) "Needed: the model's name at that service." else "Using ${ai.model}.",
+            TextSettingRow("AI model", if (ai.model.isBlank()) "Needed: the model's name at that service." else t("Using %s.", ai.model),
                 Icons.Rounded.AutoAwesome, ai.model, "Model name") { viewModel.setAiTranslation(ai.copy(model = it)) }
             KeyRows(state, viewModel, provider, "Leave it empty for a service that needs none.")
         }
         TranslationProvider.Gemini -> {
-            TextSettingRow("Gemini model", "Using ${ai.geminiModel}. Change it when Google renames its models.",
+            TextSettingRow("Gemini model", t("Using %s. Change it when Google renames its models.", ai.geminiModel),
                 Icons.Rounded.AutoAwesome, ai.geminiModel, GeminiModels.DEFAULT) { viewModel.setAiTranslation(ai.copy(geminiModel = it.ifBlank { GeminiModels.DEFAULT })) }
             KeyRows(state, viewModel, provider, "Get one free at aistudio.google.com.")
         }
@@ -151,7 +152,7 @@ private fun AiProviderRows(state: PlayerUiState, viewModel: ExternalPlaybackView
             val status = state.onDeviceModel
             val downloaded = state.onDeviceDownloadedBytes
             SettingRow("Gemini Nano", description = when {
-                downloaded != null -> "Downloading… ${downloaded / 1_000_000} MB"
+                downloaded != null -> t("Downloading… %d MB", downloaded / 1_000_000)
                 status == null -> "Checking this phone…"
                 else -> status.label
             }, icon = Icons.Rounded.PhoneAndroid,
@@ -168,7 +169,7 @@ private fun AiProviderRows(state: PlayerUiState, viewModel: ExternalPlaybackView
 @Composable
 private fun KeyRows(state: PlayerUiState, viewModel: ExternalPlaybackViewModel, provider: TranslationProvider, hint: String) {
     val saved = provider in state.translationKeys
-    TextSettingRow("${provider.label} API key", if (saved) "Key saved. Paste a new one to replace it." else hint,
+    TextSettingRow(t("%s API key", provider.label), if (saved) "Key saved. Paste a new one to replace it." else hint,
         Icons.Rounded.Key, "", "API key", password = true, clearAfterSave = true) { viewModel.useTranslationKey(provider, it) }
     if (saved) {
         SettingRow("Remove the key", description = "Forget the key on this device.", icon = Icons.Rounded.KeyOff) {
@@ -198,7 +199,7 @@ private fun TextSettingRow(
 
 @Composable
 internal fun LyricsLanguageRow(state: PlayerUiState, viewModel: ExternalPlaybackViewModel) {
-    val detected = state.lyricsLanguage?.let { "Detected: ${TranslationLanguages.name(it)}" } ?: "Not detected yet"
+    val detected = state.lyricsLanguage?.let { t("Detected: %s", t(TranslationLanguages.name(it))) } ?: t("Not detected yet")
     val languages = TranslationLanguages.all(listOfNotNull(state.lyricsLanguageOverride))
     SettingRow("Lyrics language", description = detected, icon = Icons.Rounded.Translate) {
         SpicySelect(state.lyricsLanguageOverride ?: "auto", listOf("auto") + languages.map { it.first },

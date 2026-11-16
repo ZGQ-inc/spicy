@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.t
 import com.tx24.spicyplayer.ui.components.SettingsPeek
 import com.tx24.spicyplayer.ui.components.SpicyGlyphs
 import androidx.compose.animation.AnimatedContent
@@ -79,10 +80,10 @@ fun QuickSettingsModal(
         backdrop = backdrop,
         peek = peek,
         title = when (screen) {
-            QuickScreen.Main -> "Quick settings"
-            QuickScreen.Queue -> "Queue"
-            QuickScreen.LyricsManager -> if (uploading) "Upload TTML" else "Local Lyrics DB"
-            QuickScreen.Source -> "Lyrics source"
+            QuickScreen.Main -> t("Quick settings")
+            QuickScreen.Queue -> t("Queue")
+            QuickScreen.LyricsManager -> if (uploading) t("Upload TTML") else t("Local Lyrics DB")
+            QuickScreen.Source -> t("Lyrics source")
         },
         skeleton = { SettingsSkeleton(rows = 4) },
         // The header's back arrow (and Back) step out of a screen before Back closes the pop-up.
@@ -116,7 +117,7 @@ private fun MainScreen(state: PlayerUiState, viewModel: ExternalPlaybackViewMode
     // The screens this opens share one compact card, so the settings tuned right here keep the room.
     Column(Modifier.fillMaxWidth().outlinedCard()) {
         if (state.queue.isNotEmpty()) {
-            GroupRow(SpicyGlyphs.Queue, "Queue", "${state.queue.size} ${if (state.queue.size == 1) "song" else "songs"}") {
+            GroupRow(SpicyGlyphs.Queue, t("Queue"), t(if (state.queue.size == 1) "%d song" else "%d songs", state.queue.size)) {
                 open(QuickScreen.Queue)
             }
             GroupDivider()
@@ -126,24 +127,24 @@ private fun MainScreen(state: PlayerUiState, viewModel: ExternalPlaybackViewMode
             val showing = (state.lyrics as? LyricsState.Ready)?.provider
             GroupRow(
                 SpicyGlyphs.Source,
-                "Lyrics source",
+                t("Lyrics source"),
                 when {
-                    chosen != null -> "$chosen, chosen for this song"
-                    showing != null -> "Automatic, showing $showing"
-                    else -> "Automatic"
+                    chosen != null -> t("%s, chosen for this song", chosen)
+                    showing != null -> t("Automatic, showing %s", showing)
+                    else -> t("Automatic")
                 },
             ) { open(QuickScreen.Source) }
             GroupDivider()
         }
-        GroupRow(SpicyGlyphs.LyricsManager, "Lyrics Manager", "Save or upload lyrics, link a folder") { open(QuickScreen.LyricsManager) }
+        GroupRow(SpicyGlyphs.LyricsManager, t("Lyrics Manager"), t("Save or upload lyrics, link a folder")) { open(QuickScreen.LyricsManager) }
     }
     LyricsLanguageRow(state, viewModel)
     // Only the delays picked in Scroll & Sync, so the pop-up stays short.
     if (DelayKind.Song in delays) SongDelayRow(state, viewModel)
     if (DelayKind.Player in delays) PlayerDelayRow(state, viewModel)
     if (DelayKind.Output in delays) SettingRow(
-        label = "Output delay",
-        description = "For every song on ${state.outputLabel}. Move it right if the lyrics run ahead of the song.",
+        label = t("Output delay"),
+        description = t("For every song on %s. Move it right if the lyrics run ahead of the song.", state.outputLabel),
         icon = Icons.Rounded.Timer,
         stacked = true,
     ) {

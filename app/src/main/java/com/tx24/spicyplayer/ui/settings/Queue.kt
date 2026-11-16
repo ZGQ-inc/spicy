@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.t
 import com.tx24.spicyplayer.ui.theme.SpicyMotion
 
 import com.tx24.spicyplayer.ui.components.LocalUiAnimations
@@ -131,7 +132,7 @@ fun QueueList(state: PlayerUiState, viewModel: ExternalPlaybackViewModel, onJump
     }
     if (state.queue.isEmpty()) {
         Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Text("The player isn't sharing a queue right now.", style = SpicyType.Body.copy(color = SpicyColors.TextSecondary))
+            Text(t("The player isn't sharing a queue right now."), style = SpicyType.Body.copy(color = SpicyColors.TextSecondary))
         }
         return
     }
@@ -175,7 +176,7 @@ private fun Modifier.cascaded(rank: Int): Modifier {
 @Composable
 private fun QueueLabel(text: String, modifier: Modifier) {
     Text(
-        text,
+        t(text),
         modifier = modifier.fillMaxWidth().padding(start = SpicySpacing.S3, top = 10.dp, bottom = 2.dp),
         style = SpicyType.Footnote.copy(color = SpicyColors.TextTertiary, fontWeight = FontWeight.SemiBold),
     )

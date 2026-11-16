@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.t
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,13 +54,13 @@ fun SourceList(state: PlayerUiState, viewModel: ExternalPlaybackViewModel, onCho
         items(choices, key = { it.id }) { choice ->
             SourceRow(
                 name = choice.name,
-                status = if (choice.shown && state.sourceOverride == null) "${choice.status} · showing now" else choice.status,
+                status = if (choice.shown && state.sourceOverride == null) "${t(choice.status)} · ${t("showing now")}" else t(choice.status),
                 selected = state.sourceOverride == choice.id,
                 enabled = choice.available,
                 action = if (choice.canModelSync) {
                     {
                         SpicyButton(
-                            text = if (state.modelSyncing) "Timing every word…" else "Word-sync with lrc.red's model",
+                            text = if (state.modelSyncing) t("Timing every word…") else t("Word-sync with lrc.red's model"),
                             onClick = viewModel::requestModelSync,
                             enabled = !state.modelSyncing,
                         )
@@ -96,12 +97,12 @@ private fun SourceRow(
         Box(Modifier.size(8.dp).background(if (selected) SpicyColors.StatusSuccess else Color.Transparent, CircleShape))
         Column(Modifier.weight(1f)) {
             Text(
-                name,
+                t(name),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = SpicyType.Body.copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium),
             )
-            Text(status, maxLines = 2, style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary))
+            Text(t(status), maxLines = 2, style = SpicyType.Caption.copy(color = SpicyColors.TextSecondary))
             if (action != null) {
                 Box(Modifier.padding(top = SpicySpacing.S2)) { action() }
             }

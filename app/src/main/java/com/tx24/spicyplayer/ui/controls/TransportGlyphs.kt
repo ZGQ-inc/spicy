@@ -88,13 +88,14 @@ internal class PlayPauseGlyph(private val pause: () -> Float) : Painter() {
         val pauseUnit = w / PAUSE_WIDTH
         val playUnit = w / PLAY_WIDTH
         val playTop = (size.height - HEIGHT * playUnit) / 2f
+        val pauseTop = (size.height - HEIGHT * pauseUnit) / 2f
         // At rest, the real glyphs: the morph's halves would show a seam down the triangle.
         if (t == 0f) {
             translate(top = playTop) { scale(playUnit, playUnit, pivot = Offset.Zero) { drawPath(PLAY_PATH, Color.White) } }
             return
         }
         if (t == 1f) {
-            scale(pauseUnit, pauseUnit, pivot = Offset.Zero) { drawPath(PAUSE_PATH, Color.White) }
+            translate(top = pauseTop) { scale(pauseUnit, pauseUnit, pivot = Offset.Zero) { drawPath(PAUSE_PATH, Color.White) } }
             return
         }
         paint.color = Color.White
@@ -106,7 +107,7 @@ internal class PlayPauseGlyph(private val pause: () -> Float) : Painter() {
                     val play = PLAY[half][corner]
                     val bar = PAUSE[half][corner]
                     val x = lerp(play.x * playUnit, bar.x * pauseUnit, t)
-                    val y = lerp(playTop + play.y * playUnit, bar.y * pauseUnit, t)
+                    val y = lerp(playTop + play.y * playUnit, pauseTop + bar.y * pauseUnit, t)
                     if (corner == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
                 path.close()

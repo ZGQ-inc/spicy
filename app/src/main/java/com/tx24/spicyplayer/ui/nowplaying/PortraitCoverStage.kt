@@ -42,9 +42,15 @@ fun PortraitCoverStage(
     held: Boolean = false,
 ) {
     val artwork = rememberSessionArtwork(info.artwork, info.artworkUri, maxDimension = ARTWORK_MAX_PX, hasSession = info.hasSession)
-    // The last cover stays up while the player has none to show.
+    // The last cover stays up while the player has none to show, but clears on idle/session end.
     var resting by remember { mutableStateOf<SessionArtwork?>(null) }
-    LaunchedEffect(artwork?.fingerprint) { if (artwork != null) resting = artwork }
+    LaunchedEffect(artwork?.fingerprint, info.hasSession, info.title) {
+        if (!info.hasSession || info.title == "Nothing playing") {
+            resting = null
+        } else if (artwork != null) {
+            resting = artwork
+        }
+    }
     var failedMotionUrl by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current

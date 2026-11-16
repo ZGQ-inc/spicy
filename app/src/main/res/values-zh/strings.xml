@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Spicy Lyrics Mobile</string>
+    <string name="widget_name">歌词</string>
+    <string name="widget_settings">歌词小组件</string>
+    <string name="widget_description">在封面背景色上展示正在播放的歌词</string>
+    <string name="widget_waiting">播放音乐以在此查看歌词</string>
+    <string name="widget_play_pause">播放或暂停</string>
+    <string name="widget_previous">上一首</string>
+    <string name="widget_next">下一首</string>
+    <string name="update_channel">更新</string>
+    <string name="update_ready_title">更新已下载</string>
+    <string name="update_ready_text">点击以安装</string>
+</resources>

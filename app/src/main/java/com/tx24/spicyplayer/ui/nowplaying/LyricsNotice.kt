@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.tx24.spicyplayer.i18n.t
 import com.tx24.spicyplayer.haptics.withHaptic
 import com.tx24.spicyplayer.lyrics.LyricsState
 import com.tx24.spicyplayer.lyrics.NoticeKind
@@ -84,6 +85,61 @@ internal class NoticeActions(
     val report: () -> String,
     val onSearchSpotify: () -> Unit,
 )
+
+/** Translates dynamic notice details like "%d sources had none. Couldn't check %s". */
+internal fun translateNoticeDetail(raw: String?): String? {
+    if (raw == null) return null
+    if (!com.tx24.spicyplayer.i18n.I18n.isChinese()) return raw
+
+    val hadNoneWithFailures = Regex("""^(\d+)\s+sources?\s+had\s+none\.\s+Couldn't\s+check\s+(.+)$""").find(raw)
+    if (hadNoneWithFailures != null) {
+        val count = hadNoneWithFailures.groupValues[1]
+        val fails = translateFailures(hadNoneWithFailures.groupValues[2])
+        return "${count} 个歌词源未找到歌词，无法连接 $fails"
+    }
+
+    val hadNoneOnly = Regex("""^(\d+)\s+sources?\s+had\s+none$""").find(raw)
+    if (hadNoneOnly != null) {
+        val count = hadNoneOnly.groupValues[1]
+        return "${count} 个歌词源均未找到歌词"
+    }
+
+    val checkedNone = Regex("""^Checked\s+(\d+)\s+sources?,\s+none\s+had\s+it$""").find(raw)
+    if (checkedNone != null) {
+        val count = checkedNone.groupValues[1]
+        return "已检索 ${count} 个歌词源，均未找到歌词"
+    }
+
+    val reachNone = Regex("""^Couldn't\s+reach\s+(.+)$""").find(raw)
+    if (reachNone != null) {
+        val fails = translateFailures(reachNone.groupValues[1])
+        return "无法连接 $fails"
+    }
+
+    return t(raw)
+}
+
+private fun translateFailures(rawFailures: String): String {
+    var s = rawFailures
+    val dict = listOf(
+        "timed out" to "连接超时",
+        "no connection" to "无网络连接",
+        "key rejected" to "API 密钥无效",
+        "bad request" to "请求错误",
+        "server error" to "服务器异常",
+        "unreadable response" to "响应无法解析",
+        "unreadable lyrics" to "歌词格式错误",
+        "rate limited" to "请求频率超限",
+        "cooling down" to "冷却等待中",
+        "queued" to "排队中",
+        "no answer" to "未响应",
+        "error" to "发生错误",
+    )
+    for ((en, zh) in dict) {
+        s = s.replace(en, zh)
+    }
+    return s
+}
 
 /** [error]'s notice; compact (title and a short detail, no buttons) without [actions]. */
 @Composable
@@ -140,7 +196,7 @@ internal fun LyricsNotice(
         translationY = (1f - entrance.value) * riseOffsetPx
     }
     if (compact) {
-        CompactNotice(title, detail?.substringBefore(". ")?.trimEnd('.'), modifier.then(enter))
+        CompactNotice(title, translateNoticeDetail(detail?.substringBefore(". ")?.trimEnd('.')), modifier.then(enter))
         return
     }
 
@@ -174,7 +230,7 @@ internal fun LyricsNotice(
                 ) {
                     val base = SpicyType.Body.copy(textAlign = align)
                     Text(
-                        title,
+                        t(title),
                         style = base.copy(
                             fontSize = titleSp.sp,
                             fontWeight = FontWeight.Bold,
@@ -185,7 +241,7 @@ internal fun LyricsNotice(
                     )
                     if (body != null) {
                         Text(
-                            body,
+                            t(body),
                             modifier = Modifier.padding(top = em * 0.85f),
                             style = base.copy(
                                 fontSize = bodySp.sp,
@@ -195,9 +251,10 @@ internal fun LyricsNotice(
                             ),
                         )
                     }
-                    if (detail != null) {
+                    val translatedDetail = translateNoticeDetail(detail)
+                    if (translatedDetail != null) {
                         Text(
-                            detail,
+                            translatedDetail,
                             modifier = Modifier.padding(top = em * 0.6f),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -322,7 +379,7 @@ private fun NoticeButton(label: String, icon: ImageVector, onClick: () -> Unit, 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(glyph, null, Modifier.size((textSp * 1.2f).dp), tint = color)
                 Spacer(Modifier.width(8.dp))
-                Text(text, style = SpicyType.Body.copy(fontSize = textSp.sp, color = color, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
+                Text(t(text), style = SpicyType.Body.copy(fontSize = textSp.sp, color = color, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
             }
         }
     }
@@ -363,10 +420,11 @@ private fun CompactNotice(title: String, detail: String?, modifier: Modifier) {
             size to detailSize.takeIf { detailFits }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(title, style = base.copy(fontSize = titleSp.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (detail != null && detailSp != null) {
+            Text(t(title), style = base.copy(fontSize = titleSp.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val translatedDetail = translateNoticeDetail(detail)
+            if (translatedDetail != null && detailSp != null) {
                 Text(
-                    detail,
+                    translatedDetail,
                     modifier = Modifier.padding(top = 4.dp),
                     style = detailBase.copy(fontSize = detailSp.sp),
                     maxLines = 1,

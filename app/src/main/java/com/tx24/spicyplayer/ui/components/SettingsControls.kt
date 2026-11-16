@@ -1,5 +1,6 @@
 package com.tx24.spicyplayer.ui.components
 
+import com.tx24.spicyplayer.i18n.t
 import androidx.compose.ui.composed
 import androidx.compose.runtime.ReadOnlyComposable
 import android.os.SystemClock
@@ -188,7 +189,10 @@ private class BoundsHolder {
 /** Whether the label or the description contains the query, ignoring case. */
 fun settingMatches(query: String, vararg terms: String?): Boolean {
     val q = query.trim()
-    return q.isEmpty() || terms.any { it?.contains(q, ignoreCase = true) == true }
+    return q.isEmpty() || terms.any { term ->
+        term?.contains(q, ignoreCase = true) == true ||
+            (term != null && t(term).contains(q, ignoreCase = true))
+    }
 }
 
 /** Shows [content] only when one of [terms] matches the search. */
@@ -236,7 +240,7 @@ fun SectionTitle(text: String, divider: Boolean = true) {
     Column(Modifier.fillMaxWidth()) {
         if (divider) Box(Modifier.padding(top = SpicySpacing.S2).fillMaxWidth().height(1.dp).background(SpicyColors.Hairline))
         Text(
-            text,
+            t(text),
             style = SpicyType.Headline.copy(letterSpacing = (-0.005).em),
             modifier = Modifier.padding(start = 2.dp, end = 2.dp, top = if (divider) SpicySpacing.S4 else SpicySpacing.S2, bottom = SpicySpacing.S2),
         )
@@ -347,8 +351,8 @@ fun RowLabel(label: String, description: String?, modifier: Modifier = Modifier,
         // Level with the label's first line, however long the description runs.
         if (icon != null) Icon(icon, null, tint = SpicyColors.TextSecondary, modifier = Modifier.padding(top = 1.dp).size(20.dp))
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, style = SpicyType.Body.copy(fontWeight = FontWeight.Medium))
-            if (description != null) Text(description, style = DescriptionStyle)
+            Text(t(label), style = SpicyType.Body.copy(fontWeight = FontWeight.Medium))
+            if (description != null) Text(t(description), style = DescriptionStyle)
         }
     }
 }
@@ -458,9 +462,9 @@ fun SpicyMultiSelect(
 ) {
     val haptics = LocalHapticFeedback.current
     val label = when (selected.size) {
-        0 -> none
-        1 -> labels.getOrElse(options.indexOf(selected.single())) { selected.single() }
-        else -> "${selected.size} picked"
+        0 -> t(none)
+        1 -> t(labels.getOrElse(options.indexOf(selected.single())) { selected.single() })
+        else -> t("%d picked", selected.size)
     }
     SelectMenu(label, modifier, enabled, searchable = options.size >= SEARCH_FROM) { _, query ->
         val shown = matchingOptions(query, options, labels)
@@ -552,7 +556,7 @@ private fun SelectMenu(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(label, style = SpicyType.Caption.copy(fontWeight = FontWeight.Medium))
+            Text(t(label), style = SpicyType.Caption.copy(fontWeight = FontWeight.Medium))
             val turn by animateFloatAsState(if (open) 180f else 0f, tween(SpicyMotion.FAST_MS), label = "selectChevron")
             Icon(
                 Icons.Rounded.KeyboardArrowDown,
@@ -615,7 +619,7 @@ private fun SelectMenu(
                                 query,
                                 { query = it },
                                 Modifier.fillMaxWidth().padding(start = SpicySpacing.S2, end = SpicySpacing.S2, top = SpicySpacing.S2),
-                                placeholder = "Search",
+                                placeholder = t("Search"),
                             )
                         }
                         val listScroll = rememberScrollState()
@@ -628,7 +632,7 @@ private fun SelectMenu(
                             val shown = items(close, query)
                             if (shown == 0) {
                                 Text(
-                                    "No matches",
+                                    t("No matches"),
                                     Modifier.padding(horizontal = SpicySpacing.S4, vertical = SpicySpacing.S3),
                                     style = SpicyType.Body.copy(color = SpicyColors.TextTertiary),
                                 )
@@ -661,7 +665,7 @@ private fun SelectOption(label: String, selected: Boolean, enabled: Boolean = tr
         horizontalArrangement = Arrangement.spacedBy(SpicySpacing.S3),
     ) {
         Text(
-            label,
+            t(label),
             modifier = Modifier.weight(1f),
             style = SpicyType.Body.copy(
                 color = if (selected) SpicyColors.TextPrimary else SpicyColors.TextSecondary,
@@ -720,7 +724,7 @@ fun SpicyButton(
 ) {
     val color = brand ?: SpicyColors.TextPrimary
     PressSurface(onClick, modifier, enabled, horizontalPadding, brand) {
-        Text(text, style = SpicyType.Caption.copy(color = color, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
+        Text(t(text), style = SpicyType.Caption.copy(color = color, fontWeight = FontWeight.SemiBold, letterSpacing = 0.01.em))
         if (external) {
             Spacer(Modifier.width(6.dp))
             Image(
@@ -830,23 +834,38 @@ fun SpicyTextField(
     trailing: (@Composable () -> Unit)? = null,
     /** The keyboard's action key becomes Search and calls this. */
     onSearch: (() -> Unit)? = null,
+    /** Called when the text field loses focus or confirms input (e.g. for remote sync). */
+    onFocusLost: ((String) -> Unit)? = null,
     /** Grows to a few lines, Enter adding one. */
     multiline: Boolean = false,
 ) {
     val state = rememberTextFieldState(value)
     val latestValue by rememberUpdatedState(value)
     val latestOnValueChange by rememberUpdatedState(onValueChange)
+    val latestOnFocusLost by rememberUpdatedState(onFocusLost)
+
+    var focused by remember { mutableStateOf(false) }
+
     LaunchedEffect(value) {
-        if (state.text.toString() != value) state.setTextAndPlaceCursorAtEnd(value)
+        if (!focused && state.text.toString() != value) {
+            state.setTextAndPlaceCursorAtEnd(value)
+        }
     }
     LaunchedEffect(state) {
         snapshotFlow { state.text.toString() }.collect { if (it != latestValue) latestOnValueChange(it) }
     }
 
-    var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(SpicyRadii.Sm)
-    val fieldModifier = modifier.onFocusChanged { focused = it.isFocused }
-    val onKeyboardAction = onSearch?.let { search -> KeyboardActionHandler { search() } }
+    val fieldModifier = modifier.onFocusChanged { focusState ->
+        if (focused && !focusState.isFocused) {
+            latestOnFocusLost?.invoke(state.text.toString())
+        }
+        focused = focusState.isFocused
+    }
+    val onKeyboardAction = KeyboardActionHandler {
+        latestOnFocusLost?.invoke(state.text.toString())
+        onSearch?.invoke()
+    }
     val decorator = TextFieldDecorator { field ->
         Row(
             Modifier
@@ -860,7 +879,7 @@ fun SpicyTextField(
         ) {
             leading?.invoke()
             Box(Modifier.weight(1f)) {
-                if (state.text.isEmpty()) Text(placeholder, style = SpicyType.Body.copy(color = SpicyColors.TextSecondary))
+                if (state.text.isEmpty()) Text(t(placeholder), style = SpicyType.Body.copy(color = SpicyColors.TextSecondary))
                 field()
             }
             trailing?.invoke()
@@ -1050,7 +1069,7 @@ fun SpicyBipolarSlider(
             )
             if (clamped != default && enabled) {
                 Text(
-                    "Reset",
+                    t("Reset"),
                     style = SpicyType.Caption.copy(fontWeight = FontWeight.Medium, color = SpicyColors.TextSecondary),
                     modifier = Modifier
                         .focusRing(RoundedCornerShape(SpicyRadii.Sm))

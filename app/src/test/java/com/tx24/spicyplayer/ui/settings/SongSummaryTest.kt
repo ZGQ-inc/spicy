@@ -1,12 +1,15 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.I18n
 import com.tx24.spicyplayer.lyrics.LyricsState
 import com.tx24.spicyplayer.network.data.LyricsCapability
 import com.tx24.spicyplayer.network.data.LyricsSourceDescriptor
 import com.tx24.spicyplayer.network.data.ProviderAttempt
 import com.tx24.spicyplayer.network.data.ProviderAttemptOutcome
 import com.tx24.spicyplayer.playback.PlayerUiState
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Test
 
 class SongSummaryTest {
@@ -15,6 +18,19 @@ class SongSummaryTest {
         LyricsSourceDescriptor("spicy_lyrics", "Spicy Lyrics", 10, setOf(LyricsCapability.WORD_SYNC)),
         LyricsSourceDescriptor("rmm_revival", "RMM Revival", 45, setOf(LyricsCapability.WORD_SYNC)),
     )
+
+    private var previousLanguage = "system"
+
+    @Before
+    fun setUp() {
+        previousLanguage = I18n.appLanguage
+        I18n.appLanguage = "en"
+    }
+
+    @After
+    fun tearDown() {
+        I18n.appLanguage = previousLanguage
+    }
 
     @Test fun `a stand-in says which source is still being asked`() {
         val state = PlayerUiState(

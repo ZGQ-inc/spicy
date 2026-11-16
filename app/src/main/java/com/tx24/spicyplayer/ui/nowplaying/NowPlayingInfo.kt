@@ -28,7 +28,13 @@ enum class TrackDirection { Forward, Backward }
  * One of the player's own buttons, published in its PlaybackState: shuffle, repeat, like and the
  * like, as the system media controls show them. Players swap the icon to show the state.
  */
-data class SessionCustomAction(val action: String, val name: String, val icon: Bitmap?)
+data class SessionCustomAction(
+    val action: String,
+    val name: String,
+    val icon: Bitmap? = null,
+    val vectorIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    val isActive: Boolean = false,
+)
 
 /**
  * The release year beside the artists, where [position] puts it. While [pending] (still looked

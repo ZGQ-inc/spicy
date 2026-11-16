@@ -75,6 +75,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import com.tx24.spicyplayer.ui.theme.SpicyRadii
 import com.tx24.spicyplayer.R
+import com.tx24.spicyplayer.i18n.t
 import com.tx24.spicyplayer.ui.components.LocalUiAnimations
 import com.tx24.spicyplayer.ui.components.SettingRow
 import com.tx24.spicyplayer.ui.components.SpicyButtonStyle
@@ -193,7 +194,15 @@ fun IntroScreen(
                     Column(Modifier.fillMaxSize()) {
                         when (shown) {
                             IntroStep.Welcome -> WelcomeStep(next)
-                            IntroStep.Access -> AccessStep(accessGranted, openNotificationAccess, next)
+                            IntroStep.Access -> AccessStep(
+                                accessGranted,
+                                openNotificationAccess,
+                                onSkip = {
+                                    settings.bypassNotificationAccess = true
+                                    next()
+                                },
+                                next,
+                            )
                             IntroStep.UsageStats -> UsageStatsStep { keep -> onUsageStats(keep); next() }
                             IntroStep.Setup -> SetupStep(settings, next)
                             IntroStep.Gestures -> GesturesStep(next)
@@ -258,8 +267,8 @@ private fun StepHeading(icon: ImageVector, title: String, description: String) {
                 .border(1.dp, SpicyColors.Hairline, CircleShape),
             contentAlignment = Alignment.Center,
         ) { Icon(icon, null, Modifier.size(24.dp), tint = SpicyColors.TextPrimary) }
-        Text(title, style = TitleStyle)
-        Text(description, style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.55.em))
+        Text(t(title), style = TitleStyle)
+        Text(t(description), style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.55.em))
     }
 }
 
@@ -280,7 +289,7 @@ private fun ColumnScope.WelcomeStep(next: () -> Unit) {
         )
         Spacer(Modifier.height(SpicySpacing.S3))
         Text(
-            "Word-synced lyrics for whatever's playing, in whichever music app you use.",
+            t("Word-synced lyrics for whatever's playing, in whichever music app you use."),
             modifier = Modifier.widthIn(max = 320.dp),
             style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.55.em, textAlign = TextAlign.Center, fontSize = 15.sp),
         )
@@ -288,13 +297,19 @@ private fun ColumnScope.WelcomeStep(next: () -> Unit) {
 }
 
 @Composable
-private fun ColumnScope.AccessStep(granted: Boolean, openNotificationAccess: () -> Unit, next: () -> Unit) {
+private fun ColumnScope.AccessStep(
+    granted: Boolean,
+    openNotificationAccess: () -> Unit,
+    onSkip: () -> Unit,
+    next: () -> Unit,
+) {
     StepFrame(
         buttons = {
             if (granted) {
                 SpicyModalButton("Continue", next, style = SpicyButtonStyle.Primary, fill = true)
             } else {
                 SpicyModalButton("Open notification access", openNotificationAccess, style = SpicyButtonStyle.Primary, fill = true)
+                SpicyModalButton("Skip (Smart Display / Cloud Mode)", onSkip, style = SpicyButtonStyle.Quiet, fill = true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     val context = LocalContext.current
                     SpicyModalButton("Open app info", {
@@ -317,7 +332,7 @@ private fun ColumnScope.AccessStep(granted: Boolean, openNotificationAccess: () 
         if (granted) {
             Row(horizontalArrangement = Arrangement.spacedBy(SpicySpacing.S2), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.CheckCircle, null, Modifier.size(20.dp), tint = SpicyColors.StatusSuccess)
-                Text("Access is on", style = SpicyType.Body.copy(fontWeight = FontWeight.Medium, color = SpicyColors.TextPrimary))
+                Text(t("Access is on"), style = SpicyType.Body.copy(fontWeight = FontWeight.Medium, color = SpicyColors.TextPrimary))
             }
         } else {
             Hint("Find Spicy Lyrics Mobile in the list, turn it on, then come back here.")
@@ -417,13 +432,13 @@ private fun Gesture(icon: ImageVector, label: String, description: String) {
             contentAlignment = Alignment.Center,
         ) { Icon(icon, null, Modifier.size(22.dp), tint = SpicyColors.TextPrimary) }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, style = SpicyType.Headline.copy(color = SpicyColors.TextPrimary))
-            Text(description, style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.4.em))
+            Text(t(label), style = SpicyType.Headline.copy(color = SpicyColors.TextPrimary))
+            Text(t(description), style = SpicyType.Body.copy(color = SpicyColors.TextSecondary, lineHeight = 1.4.em))
         }
     }
 }
 
 @Composable
 private fun Hint(text: String) {
-    Text(text, style = SpicyType.Caption.copy(color = SpicyColors.TextTertiary, lineHeight = 1.45.em))
+    Text(t(text), style = SpicyType.Caption.copy(color = SpicyColors.TextTertiary, lineHeight = 1.45.em))
 }

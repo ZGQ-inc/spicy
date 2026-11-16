@@ -1,5 +1,7 @@
 package com.tx24.spicyplayer.ui.settings
 
+import com.tx24.spicyplayer.i18n.t
+
 import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -60,7 +62,7 @@ internal fun DelayCalibrationRow(state: PlayerUiState, viewModel: ExternalPlayba
     var active by remember { mutableStateOf(false) }
     SettingRow(
         label = "Tap to the beat",
-        description = "Finds the delay for ${state.outputLabel}: tap along to the song playing and it works out how late the sound arrives.",
+        description = t("Finds the delay for %s: tap along to the song playing and it works out how late the sound arrives.", state.outputLabel),
         icon = Icons.Rounded.TouchApp,
         stacked = active,
     ) {
@@ -104,13 +106,13 @@ private fun TapPad(state: PlayerUiState, viewModel: ExternalPlaybackViewModel, o
     val ready = state.isPlaying && beats != null
 
     val (headline, detail) = when {
-        !state.isPlaying -> "Play a song" to "Then tap along to its beat here."
-        beats == null && beatsLate -> "No beats for this song" to "It needs the song on Spotify. Try another one."
-        beats == null -> "Getting the beats…" to "Looking the song up on Spotify."
-        estimate == null -> "Tap along to the beat" to
-            "${(TapCalibration.WARMUP_TAPS + TapCalibration.MIN_TAPS - taps.size).coerceAtLeast(1)} more taps"
-        !estimate.steady -> "${estimate.delayMs.signed()} ms?" to "Your taps are uneven. Keep going."
-        else -> "${estimate.delayMs.signed()} ms" to "From ${estimate.taps} taps, give or take ${estimate.spreadMs} ms. Keep going to firm it up."
+        !state.isPlaying -> t("Play a song") to t("Then tap along to its beat here.")
+        beats == null && beatsLate -> t("No beats for this song") to t("It needs the song on Spotify. Try another one.")
+        beats == null -> t("Getting the beats…") to t("Looking the song up on Spotify.")
+        estimate == null -> t("Tap along to the beat") to
+            t("%d more taps", (TapCalibration.WARMUP_TAPS + TapCalibration.MIN_TAPS - taps.size).coerceAtLeast(1))
+        !estimate.steady -> "${estimate.delayMs.signed()} ms?" to t("Your taps are uneven. Keep going.")
+        else -> "${estimate.delayMs.signed()} ms" to t("From %d taps, give or take %s ms. Keep going to firm it up.", estimate.taps, estimate.spreadMs)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(SpicySpacing.S2)) {

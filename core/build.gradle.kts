@@ -21,6 +21,7 @@ dependencies {
     api("com.squareup.retrofit2:retrofit:3.0.0")
     api("com.squareup.retrofit2:converter-gson:3.0.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    api("com.google.zxing:core:3.5.3")
     api("javax.inject:javax.inject:1")
     implementation("com.atilika.kuromoji:kuromoji-ipadic:0.9.0")
     // Android ships the XmlPull API; a desktop app adds kxml2 at runtime.

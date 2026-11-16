@@ -20,17 +20,39 @@ class KeyInput {
     var onPrevious: () -> Unit = {}
     var onNext: () -> Unit = {}
     var onResync: () -> Unit = {}
+    var onMenu: () -> Unit = {}
+    var onToggleAmbient: () -> Unit = {}
+    var isAmbientActive: () -> Boolean = { false }
+    var onWakeAmbient: () -> Unit = {}
     private var swallowing: Int? = null
 
     /** True when [event] was taken here and goes no further. */
     fun handle(event: KeyEvent): Boolean {
         val code = event.keyCode
+
+        // Waking from ambient standby display on any key press
+        if (isAmbientActive()) {
+            if (code in VOLUME_KEYS) return false
+            if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE || code == KeyEvent.KEYCODE_BUTTON_B) {
+                if (event.action == KeyEvent.ACTION_UP) {
+                    onWakeAmbient()
+                }
+                return true
+            }
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                onWakeAmbient()
+            }
+            return true
+        }
+
         if (code in PASSED_ON) return false
+
         val shortcut = when (code) {
             KeyEvent.KEYCODE_BUTTON_L1 -> onPrevious
             KeyEvent.KEYCODE_BUTTON_R1 -> onNext
             KeyEvent.KEYCODE_BUTTON_X -> onPlayPause
             KeyEvent.KEYCODE_BUTTON_Y -> onResync
+            KeyEvent.KEYCODE_MENU -> onMenu
             else -> null
         }
         if (event.action == KeyEvent.ACTION_UP) {
@@ -55,6 +77,9 @@ class KeyInput {
     }
 
     private companion object {
+        val VOLUME_KEYS = setOf(
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE,
+        )
         val PASSED_ON = setOf(
             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_ESCAPE,
             KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE,

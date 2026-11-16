@@ -1,5 +1,8 @@
 package com.tx24.spicyplayer
 
+import android.widget.Toast
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.LifecycleEventObserver
 import android.content.pm.ActivityInfo
@@ -184,6 +187,7 @@ import com.tx24.spicyplayer.ui.controls.kind
 import com.tx24.spicyplayer.ui.nowplaying.LandscapeMetrics
 import com.tx24.spicyplayer.ui.settings.PanelSide
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.IntOffset
@@ -224,6 +228,10 @@ import com.tx24.spicyplayer.ui.nowplaying.TrackDirection
 import androidx.compose.animation.core.spring
 import com.tx24.spicyplayer.ui.settings.AppSettings
 import com.tx24.spicyplayer.ui.settings.SystemBarsMode
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.Smartphone
 import com.tx24.spicyplayer.ui.settings.RendererStyle
 import com.tx24.spicyplayer.lyrics.spicy.canvas.LyricsLayoutCalculator
 import androidx.compose.runtime.DisposableEffect
@@ -233,17 +241,35 @@ import com.tx24.spicyplayer.ui.settings.SettingsScreen
 import com.tx24.spicyplayer.ui.intro.IntroScreen
 import com.tx24.spicyplayer.ui.theme.SpicyColors
 import com.tx24.spicyplayer.ui.theme.SpicyMotion
+import com.tx24.spicyplayer.ui.theme.SpicyRadii
 import com.tx24.spicyplayer.ui.theme.SpicySpacing
 import com.tx24.spicyplayer.ui.theme.SpicyType
 import com.tx24.spicyplayer.update.UpdateStatus
 import com.tx24.spicyplayer.update.UpdateUiState
 import com.tx24.spicyplayer.update.UpdateViewModel
+import com.tx24.spicyplayer.playback.SpotifyCloudManager
+import com.tx24.spicyplayer.playback.remote.DiscoveredDisplay
+import com.tx24.spicyplayer.playback.remote.RemoteAction
+import com.tx24.spicyplayer.playback.remote.RemoteCommandPayload
+import com.tx24.spicyplayer.playback.remote.RemoteMessage
+import com.tx24.spicyplayer.playback.remote.RemoteMessageType
+import com.tx24.spicyplayer.playback.remote.RemoteNsdHelper
+import com.tx24.spicyplayer.playback.remote.RemoteSocketClient
+import com.tx24.spicyplayer.playback.remote.RemoteSocketServer
+import com.tx24.spicyplayer.playback.remote.RemoteStatePayload
+import com.tx24.spicyplayer.ui.ambient.SmartAmbientView
+import com.tx24.spicyplayer.ui.remote.RemoteConnectModal
+import com.tx24.spicyplayer.ui.settings.RemoteRole
+import com.tx24.spicyplayer.i18n.I18n
+import com.tx24.spicyplayer.i18n.t
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.tx24.spicyplayer.playback.remote.RemoteConfigPayload
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -271,13 +297,50 @@ private var imageLoaderSet = false
  * the manifest), so home-screen icons pinned before the icon choice existed keep working.
  */
 class LyricsActivity : ComponentActivity() {
+    companion object {
+        var remoteClientHolder: RemoteSocketClient? = null
+        var remoteServerHolder: RemoteSocketServer? = null
+        var pendingSpotifyAuthCode: String? = null
+
+        fun dispatchConfigChange(payload: RemoteConfigPayload) {
+            val client = remoteClientHolder
+            if (client != null && client.connected.value) {
+                client.sendConfig(payload)
+            } else {
+                remoteServerHolder?.broadcast(RemoteMessage(type = RemoteMessageType.CONFIG_SYNC, config = payload))
+            }
+        }
+    }
+
+    private val settings by lazy { AppSettings(getSharedPreferences("ui", Context.MODE_PRIVATE)) }
     private val playbackViewModel: ExternalPlaybackViewModel by viewModels()
     private val updateViewModel: UpdateViewModel by viewModels()
     private val keyInput by lazy {
         KeyInput().apply {
-            onPlayPause = playbackViewModel::playPause
-            onPrevious = playbackViewModel::skipPrevious
-            onNext = playbackViewModel::skipNext
+            onPlayPause = {
+                val client = remoteClientHolder
+                if (client != null && client.connected.value && settings.remoteRole == RemoteRole.Sender) {
+                    client.sendCommand(RemoteAction.PLAY_PAUSE)
+                } else {
+                    playbackViewModel.playPause()
+                }
+            }
+            onPrevious = {
+                val client = remoteClientHolder
+                if (client != null && client.connected.value && settings.remoteRole == RemoteRole.Sender) {
+                    client.sendCommand(RemoteAction.PREV)
+                } else {
+                    playbackViewModel.skipPrevious()
+                }
+            }
+            onNext = {
+                val client = remoteClientHolder
+                if (client != null && client.connected.value && settings.remoteRole == RemoteRole.Sender) {
+                    client.sendCommand(RemoteAction.NEXT)
+                } else {
+                    playbackViewModel.skipNext()
+                }
+            }
             onResync = playbackViewModel::resync
         }
     }
@@ -309,16 +372,96 @@ class LyricsActivity : ComponentActivity() {
     // The window's own buttons come back as broadcasts.
     private val pipReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            val client = remoteClientHolder
+            val isController = client != null && client.connected.value && settings.remoteRole == RemoteRole.Sender
             when (intent.action) {
-                PictureInPicture.ACTION_PREVIOUS -> playbackViewModel.skipPrevious()
-                PictureInPicture.ACTION_PLAY_PAUSE -> playbackViewModel.playPause()
-                PictureInPicture.ACTION_NEXT -> playbackViewModel.skipNext()
+                PictureInPicture.ACTION_PREVIOUS -> {
+                    if (isController) client?.sendCommand(RemoteAction.PREV)
+                    else playbackViewModel.skipPrevious()
+                }
+                PictureInPicture.ACTION_PLAY_PAUSE -> {
+                    if (isController) client?.sendCommand(RemoteAction.PLAY_PAUSE)
+                    else playbackViewModel.playPause()
+                }
+                PictureInPicture.ACTION_NEXT -> {
+                    if (isController) client?.sendCommand(RemoteAction.NEXT)
+                    else playbackViewModel.skipNext()
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleSpotifyDeepLink(intent)
+    }
+
+    private fun handleSpotifyDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "spicyremote" && uri.host == "callback") {
+            val error = uri.getQueryParameter("error")
+            if (!error.isNullOrBlank()) {
+                Toast.makeText(this, t("Spotify authorization failed: %s", error), Toast.LENGTH_LONG).show()
+                return
+            }
+
+            val code = uri.getQueryParameter("code")
+            if (!code.isNullOrBlank()) {
+                val cleanCode = com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils.extractCode(code)
+                pendingSpotifyAuthCode = cleanCode
+
+                Toast.makeText(this, t("Spotify auth code obtained, syncing with display…"), Toast.LENGTH_SHORT).show()
+
+                // 1. If remoteClient is active and connected, dispatch SPOTIFY_AUTH_CODE immediately
+                remoteClientHolder?.sendMessage(
+                    RemoteMessage(
+                        type = RemoteMessageType.COMMAND,
+                        command = RemoteCommandPayload(
+                            action = RemoteAction.SPOTIFY_AUTH_CODE,
+                            valueString = cleanCode,
+                        ),
+                    )
+                )
+
+                // 2. Also attempt local token exchange (works if client credentials exist locally)
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val settings = AppSettings(getSharedPreferences("ui", Context.MODE_PRIVATE))
+                    val clientId = settings.spotifyClientId
+                    val clientSecret = settings.spotifyClientSecret.ifBlank { null }
+                    if (clientId.isNotBlank()) {
+                        val client = com.tx24.spicyplayer.network.data.spotify.SpotifyWebApiClient()
+                        val res = client.exchangeAuthCode(clientId, clientSecret ?: "", cleanCode, com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils.DEEP_LINK_REDIRECT)
+                            ?: client.exchangeAuthCode(clientId, clientSecret ?: "", cleanCode, com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils.getLocalhostRedirect(settings.remoteServerPort))
+                        if (res != null && !res.refreshToken.isNullOrBlank()) {
+                            settings.spotifyAccessToken = ""
+                            settings.spotifyRefreshToken = res.refreshToken ?: ""
+                            settings.spotifyAccessToken = res.accessToken
+                            settings.spotifyCloudSyncEnabled = true
+                            pendingSpotifyAuthCode = null
+                            if (settings.remoteRole == RemoteRole.Sender) {
+                                remoteClientHolder?.sendMessage(
+                                    RemoteMessage(
+                                        type = RemoteMessageType.CONFIG_PUSH,
+                                        config = RemoteConfigPayload(
+                                            spotifyRefreshToken = res.refreshToken,
+                                            spotifyCloudSyncEnabled = true,
+                                        ),
+                                    )
+                                )
+                            }
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@LyricsActivity, t("Spotify Authorization Successful!"), Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleSpotifyDeepLink(intent)
         UsageStats.init(this)
         countImageDownloads()
         enableEdgeToEdge()
@@ -359,8 +502,19 @@ class LyricsActivity : ComponentActivity() {
                 }
             }
         }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
             val settings = remember { AppSettings(getSharedPreferences("ui", Context.MODE_PRIVATE)) }
+            DisposableEffect(settings) {
+                settings.onSettingChanged = { key, value ->
+                    if (!settings.isSyncingRemote) {
+                        LyricsActivity.dispatchConfigChange(RemoteConfigPayload(settingKey = key, settingValue = value))
+                    }
+                }
+                onDispose {
+                    settings.onSettingChanged = null
+                }
+            }
             // A change in Settings shows or hides the bars at once.
             LaunchedEffect(settings.systemBars) { applySystemBars(settings.systemBars) }
             LaunchedEffect(settings.pipShape, settings.pipCustomRatio) {
@@ -440,6 +594,9 @@ class LyricsActivity : ComponentActivity() {
         super.onResume()
         pipHeld.value = false
         playbackViewModel.refresh()
+        if (settings.remoteRole == RemoteRole.Sender) {
+            remoteClientHolder?.sendMessage(com.tx24.spicyplayer.playback.remote.RemoteMessage(type = com.tx24.spicyplayer.playback.remote.RemoteMessageType.REQUEST_STATE))
+        }
     }
 
     /**
@@ -553,14 +710,751 @@ private fun LyricsApp(
     onPipAllowed: (Boolean) -> Unit,
     keyInput: KeyInput = remember { KeyInput() },
 ) {
-    val state by viewModel.state.collectAsState()
     val context = LocalContext.current
+    val state by viewModel.state.collectAsState()
+    val weather by viewModel.weather.collectAsState()
+    var smartAmbientActive by remember { mutableStateOf(false) }
+    val touches = remember { MutableStateFlow(0L) }
+    val isSender = settings.remoteRole == RemoteRole.Sender
+    val isRedirecting = settings.remotePlaybackRedirectEnabled
+    val isController = isSender && !isRedirecting
+
+    LaunchedEffect(isSender, isRedirecting) {
+        viewModel.isControllerMode = { isSender && !isRedirecting }
+    }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    // 1. Spotify Cloud Manager
+    val spotifyCloudManager = remember(settings.spotifyCloudSyncEnabled, settings.spotifyRefreshToken, settings.spotifyClientId, isController) {
+        if (!isController) {
+            SpotifyCloudManager(settings, coroutineScope).apply {
+                onPlaybackReceived = { viewModel.updateFromCloud(it) }
+                isLocalPlaybackActive = { viewModel.isLocalPlaybackActive() }
+            }
+        } else null
+    }
+    LaunchedEffect(spotifyCloudManager, settings.spotifyCloudSyncEnabled, isController) {
+        if (!isController && spotifyCloudManager != null && settings.spotifyCloudSyncEnabled) {
+            viewModel.cloudSpotifyManager = spotifyCloudManager
+            spotifyCloudManager.start()
+        } else {
+            spotifyCloudManager?.stop()
+            viewModel.resetCloudPlayback()
+        }
+    }
+
+    LaunchedEffect(settings.remotePlaybackRedirectEnabled, settings.spotifyCloudSyncEnabled, isController) {
+        if (!isController && !settings.spotifyCloudSyncEnabled && !settings.remotePlaybackRedirectEnabled) {
+            if (viewModel.isRemoteSessionActive) {
+                viewModel.updateFromRemote(null)
+            }
+            if (viewModel.isCloudSessionActive) {
+                viewModel.resetCloudPlayback()
+            }
+            if (!viewModel.isLocalPlaybackActive()) {
+                viewModel.resetToIdleState()
+            }
+        }
+    }
+
+    // 2. Weather Polling
+    LaunchedEffect(
+        settings.smartClockShowWeather,
+        settings.showWeatherOnLyricsScreen,
+        settings.owmApiKey,
+        settings.owmCity,
+        settings.weatherRefreshIntervalMinutes,
+        isController,
+    ) {
+        val shouldPoll = !isController &&
+            (settings.smartClockShowWeather || settings.showWeatherOnLyricsScreen) &&
+            (settings.owmApiKey.isNotBlank() || settings.owmCity.isNotBlank())
+        if (shouldPoll) {
+            val intervalMinutes = settings.weatherRefreshIntervalMinutes.coerceIn(5, 1440)
+            viewModel.weatherClient.cacheDurationMs = intervalMinutes * 60 * 1000L
+            viewModel.fetchWeather(settings.owmApiKey, settings.owmCity, force = true)
+            while (true) {
+                delay(intervalMinutes * 60 * 1000L)
+                viewModel.fetchWeather(settings.owmApiKey, settings.owmCity, force = true)
+            }
+        }
+    }
+
+    // 3. Smart Ambient Idle Transition (resets countdown on user touch/remote keypress)
+    LaunchedEffect(settings.smartDisplayEnabled, state.isPlaying, smartAmbientActive, settings.smartDisplayIdleTimeoutSeconds, isController) {
+        if (isController) {
+            return@LaunchedEffect
+        }
+        if (!settings.smartDisplayEnabled) {
+            smartAmbientActive = false
+            return@LaunchedEffect
+        }
+        if (state.isPlaying) {
+            smartAmbientActive = false
+            return@LaunchedEffect
+        }
+        if (!smartAmbientActive) {
+            touches.collectLatest {
+                delay(settings.smartDisplayIdleTimeoutSeconds * 1000L)
+                if (!state.isPlaying && !smartAmbientActive) {
+                    smartAmbientActive = true
+                }
+            }
+        }
+    }
+
+    fun buildStatePayload(): RemoteStatePayload {
+        val pos = viewModel.currentLyricPositionMs()
+        val readyLyrics = state.lyrics as? LyricsState.Ready
+        val currentLine = readyLyrics?.lines
+            ?.lastOrNull { it.startMs <= pos }
+            ?.words?.joinToString(" ") { it.text }
+            ?: readyLyrics?.lines?.firstOrNull()?.words?.joinToString(" ") { it.text }
+
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+        val maxVol = am?.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) ?: 100
+        val curVol = am?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: maxVol
+        val volPercent = if (maxVol > 0) (curVol * 100 / maxVol) else 100
+
+        val queueItems = state.queue.map {
+            com.tx24.spicyplayer.playback.remote.RemoteQueueItem(
+                id = it.id,
+                title = it.title,
+                subtitle = it.subtitle,
+                artworkUrl = it.iconUri,
+                current = it.current,
+            )
+        }
+
+        val effectiveArtworkUrl = if (state.title == "Nothing playing") {
+            null
+        } else if (state.artworkUri?.startsWith("http") == true) {
+            state.artworkUri
+        } else if (state.artwork != null) {
+            try {
+                val bmp = state.artwork!!
+                val maxDim = maxOf(bmp.width, bmp.height).toFloat()
+                val targetDim = 256
+                val scaled = if (maxDim > targetDim) {
+                    android.graphics.Bitmap.createScaledBitmap(
+                        bmp,
+                        (bmp.width * targetDim / maxDim).toInt().coerceAtLeast(1),
+                        (bmp.height * targetDim / maxDim).toInt().coerceAtLeast(1),
+                        true,
+                    )
+                } else bmp
+                val stream = java.io.ByteArrayOutputStream()
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
+                val base64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                "data:image/jpeg;base64,$base64"
+            } catch (_: Exception) {
+                state.artworkUri
+            }
+        } else {
+            state.artworkUri
+        }
+
+        return RemoteStatePayload(
+            title = state.title,
+            artist = state.artist,
+            album = state.album,
+            durationMs = state.durationMs,
+            positionMs = viewModel.currentPositionMs(),
+            isPlaying = state.isPlaying,
+            lyricDelayMs = state.lyricDelayMs,
+            artworkUrl = effectiveArtworkUrl,
+            currentLyricsLine = currentLine,
+            weatherCondition = weather?.condition,
+            weatherDescription = weather?.description,
+            weatherTempC = weather?.tempC,
+            weatherFeelsLikeC = weather?.feelsLikeC,
+            weatherMinC = weather?.tempMinC,
+            weatherMaxC = weather?.tempMaxC,
+            weatherHumidity = weather?.humidity,
+            weatherEmoji = weather?.emoji,
+            weatherIconCode = weather?.iconCode,
+            cityName = weather?.cityName,
+            rendererStyle = settings.rendererStyle.name,
+            lyricsSizePercent = settings.lyricsSizePortrait,
+            clockScalePercent = settings.clockScalePercent,
+            ambientClockScalePercent = settings.ambientClockScalePercent,
+            volumePercent = volPercent,
+            clock12h = settings.clock12h,
+            showSeconds = settings.clockShowSeconds,
+            showDate = settings.smartClockShowDate,
+            showWeatherDetails = settings.clockShowWeatherDetails,
+            romanize = settings.romanize,
+            translate = state.translationEnabled,
+            ambientViewActive = smartAmbientActive,
+            nightModeActive = settings.nightModeEnabled,
+            deviceName = settings.remoteDeviceName,
+            shuffleState = state.customActions.firstOrNull { it.action == "spotify_shuffle" }?.isActive
+                ?: spotifyCloudManager?.playback?.value?.shuffleState ?: false,
+            repeatState = if (state.customActions.firstOrNull { it.action == "spotify_repeat" }?.name?.contains("one", ignoreCase = true) == true) "track"
+                else if (state.customActions.firstOrNull { it.action == "spotify_repeat" }?.isActive == true) "context"
+                else spotifyCloudManager?.playback?.value?.repeatState ?: "off",
+            queue = queueItems,
+            detectedSpotifyId = state.detectedSpotifyId,
+        )
+    }
+
+    fun buildConfigPayload(): RemoteConfigPayload {
+        return RemoteConfigPayload(
+            allSettings = settings.exportAllSettings(),
+            owmApiKey = settings.owmApiKey,
+            owmCity = settings.owmCity,
+            owmUseCelsius = settings.owmUseCelsius,
+            weatherRefreshIntervalMinutes = settings.weatherRefreshIntervalMinutes,
+            showBatteryIndicator = settings.showBatteryIndicator,
+            batteryIndicatorScale = settings.batteryIndicatorScale,
+            appLanguage = settings.appLanguage,
+            spotifyClientId = settings.spotifyClientId,
+            spotifyClientSecret = settings.spotifyClientSecret,
+            spotifyRefreshToken = settings.spotifyRefreshToken,
+            spotifyCloudSyncEnabled = settings.spotifyCloudSyncEnabled,
+            spotifySyncIntervalSeconds = settings.spotifySyncIntervalSeconds,
+            clock12h = settings.clock12h,
+            showSeconds = settings.clockShowSeconds,
+            showDate = settings.smartClockShowDate,
+            showWeather = settings.smartClockShowWeather,
+            showWeatherDetails = settings.clockShowWeatherDetails,
+            showClockOnLyricsScreen = settings.showClockOnLyricsScreen,
+            showWeatherOnLyricsScreen = settings.showWeatherOnLyricsScreen,
+            clockScalePercent = settings.clockScalePercent,
+            ambientClockScalePercent = settings.ambientClockScalePercent,
+            lyricsSizePercent = settings.lyricsSizePortrait,
+            lyricsSizePortrait = settings.lyricsSizePortrait,
+            lyricsSizeLandscape = settings.lyricsSizeLandscape,
+            rendererStyle = settings.rendererStyle.name,
+            nightMode = settings.nightModeEnabled,
+            smartDisplayEnabled = settings.smartDisplayEnabled,
+            ambientIdleTimeoutSeconds = settings.smartDisplayIdleTimeoutSeconds,
+            minimalLyricsMode = settings.minimalLyricsMode,
+            remoteDeviceName = settings.remoteDeviceName,
+            nextUpCard = settings.nextUpCard,
+            nextUpScalePercent = settings.nextUpScalePercent,
+            pixelShiftEnabled = settings.pixelShiftEnabled,
+        )
+    }
+
+    // 4. Remote Control: Receiver (Smart Display mode)
+    val remoteNsd = remember { RemoteNsdHelper(context) }
+
+    val remoteServer = remember(settings.remoteRole, settings.remoteServerPort) {
+        if (!isController && settings.remoteRole == RemoteRole.Receiver) {
+            RemoteSocketServer(coroutineScope, settings.remoteServerPort).apply {
+                getInitialState = { buildStatePayload() }
+                getInitialConfig = { buildConfigPayload() }
+                onClientConnected = { ip ->
+                    coroutineScope.launch(Dispatchers.Main) {
+                        Toast.makeText(context, t("Remote controller connected (%s)", ip), Toast.LENGTH_SHORT).show()
+                    }
+                }
+                onClientDisconnected = { ip ->
+                    coroutineScope.launch(Dispatchers.Main) {
+                        Toast.makeText(context, t("Remote controller disconnected (%s)", ip), Toast.LENGTH_SHORT).show()
+                        if (clientsCount.value <= 1 && settings.remotePlaybackRedirectEnabled && !settings.spotifyCloudSyncEnabled) {
+                            viewModel.updateFromRemote(null)
+                        }
+                    }
+                }
+                onSpotifyAuthCodeReceived = { code ->
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val clientId = settings.spotifyClientId
+                        val clientSecret = settings.spotifyClientSecret.ifBlank { null }
+                        val localIp = com.tx24.spicyplayer.playback.remote.NetworkUtils.getLocalIpAddress() ?: "127.0.0.1"
+                        val redirectUri = "http://$localIp:${settings.remoteServerPort}/callback"
+                        val client = com.tx24.spicyplayer.network.data.spotify.SpotifyWebApiClient()
+                        val res = client.exchangeAuthCode(clientId, clientSecret ?: "", code, com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils.getLocalhostRedirect(settings.remoteServerPort))
+                            ?: client.exchangeAuthCode(clientId, clientSecret ?: "", code, com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils.DEEP_LINK_REDIRECT)
+                            ?: client.exchangeAuthCode(clientId, clientSecret ?: "", code, redirectUri)
+                        if (res != null && !res.refreshToken.isNullOrBlank()) {
+                            settings.spotifyAccessToken = ""
+                            settings.spotifyRefreshToken = res.refreshToken ?: ""
+                            settings.spotifyAccessToken = res.accessToken
+                            settings.spotifyCloudSyncEnabled = true
+                            broadcast(
+                                RemoteMessage(
+                                    type = RemoteMessageType.CONFIG_SYNC,
+                                    config = RemoteConfigPayload(
+                                        spotifyRefreshToken = res.refreshToken,
+                                        spotifyCloudSyncEnabled = true,
+                                    ),
+                                )
+                            )
+                        }
+                    }
+                }
+                onMessageReceived = { msg ->
+                    when (msg.type) {
+                        RemoteMessageType.REQUEST_STATE -> {
+                            if (!settings.remotePlaybackRedirectEnabled) {
+                                broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                            }
+                            broadcast(RemoteMessage(type = RemoteMessageType.CONFIG_SYNC, config = buildConfigPayload()))
+                        }
+                        RemoteMessageType.PLAYBACK_REDIRECT -> {
+                            val cloudPlaying = viewModel.cloudSpotifyManager?.playback?.value?.isPlaying == true
+                            val localPlaying = viewModel.isLocalPlaybackActive()
+                            val allowRedirect = settings.remotePlaybackRedirectEnabled || (!cloudPlaying && !localPlaying)
+                            if (allowRedirect) {
+                                msg.state?.let { s ->
+                                    coroutineScope.launch(Dispatchers.Main) {
+                                        if (s.title.isBlank() || s.title == "Nothing playing") {
+                                            viewModel.updateFromRemote(null)
+                                        } else {
+                                            viewModel.updateFromRemote(s)
+                                            if (s.isPlaying) {
+                                                smartAmbientActive = false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        RemoteMessageType.COMMAND -> {
+                            msg.command?.let { cmd ->
+                                when (cmd.action) {
+                                    RemoteAction.PLAY_PAUSE -> {
+                                        viewModel.playPause()
+                                        coroutineScope.launch {
+                                            delay(80L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.PLAY -> {
+                                        if (!viewModel.state.value.isPlaying) viewModel.playPause()
+                                        coroutineScope.launch {
+                                            delay(80L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.PAUSE -> {
+                                        if (viewModel.state.value.isPlaying) viewModel.playPause()
+                                        coroutineScope.launch {
+                                            delay(80L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.NEXT -> {
+                                        viewModel.skipNext()
+                                        coroutineScope.launch {
+                                            delay(150L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.PREV -> {
+                                        viewModel.skipPrevious()
+                                        coroutineScope.launch {
+                                            delay(150L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.SEEK -> cmd.valueLong?.let {
+                                        viewModel.seekTo(it)
+                                        coroutineScope.launch {
+                                            delay(80L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.DELAY_DELTA -> cmd.valueInt?.let { viewModel.adjustLyricDelay(it) }
+                                    RemoteAction.TOGGLE_ROMANIZE -> settings.romanize = !settings.romanize
+                                    RemoteAction.TOGGLE_TRANSLATE -> viewModel.toggleTranslation()
+                                    RemoteAction.SET_RENDERER_STYLE -> {
+                                        if (cmd.valueString != null) {
+                                            settings.rendererStyle = if (cmd.valueString == "Bloom") RendererStyle.Bloom else RendererStyle.Spring
+                                        } else {
+                                            settings.rendererStyle = if (settings.rendererStyle == RendererStyle.Spring) RendererStyle.Bloom else RendererStyle.Spring
+                                        }
+                                    }
+                                    RemoteAction.SET_LYRICS_SIZE -> cmd.valueInt?.let {
+                                        settings.lyricsSizePortrait = it
+                                        settings.lyricsSizeLandscape = it
+                                    }
+                                    RemoteAction.SET_CLOCK_SIZE -> cmd.valueInt?.let {
+                                        settings.clockScalePercent = it
+                                    }
+                                    RemoteAction.SET_AMBIENT_CLOCK_SIZE -> cmd.valueInt?.let {
+                                        settings.ambientClockScalePercent = it
+                                    }
+                                    RemoteAction.TOGGLE_AMBIENT_VIEW -> smartAmbientActive = !smartAmbientActive
+                                    RemoteAction.TOGGLE_NIGHT_MODE -> settings.nightModeEnabled = !settings.nightModeEnabled
+                                    RemoteAction.SET_VOLUME -> cmd.valueInt?.let { vol ->
+                                        val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+                                        am?.let { audio ->
+                                            val max = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                                            val target = (vol * max / 100).coerceIn(0, max)
+                                            audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, target, 0)
+                                        }
+                                        spotifyCloudManager?.setVolume(vol)
+                                    }
+                                    RemoteAction.RELOAD_WEATHER -> {
+                                        if (settings.owmApiKey.isNotBlank()) {
+                                            viewModel.fetchWeather(settings.owmApiKey, settings.owmCity, force = true)
+                                        }
+                                    }
+                                    RemoteAction.TOGGLE_SHUFFLE -> {
+                                        viewModel.sendCustomAction("spotify_shuffle")
+                                        coroutineScope.launch {
+                                            delay(150L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.CYCLE_REPEAT -> {
+                                        viewModel.sendCustomAction("spotify_repeat")
+                                        coroutineScope.launch {
+                                            delay(150L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.CUSTOM_ACTION -> {
+                                        cmd.valueString?.let { viewModel.sendCustomAction(it) }
+                                        coroutineScope.launch {
+                                            delay(150L)
+                                            broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                                        }
+                                    }
+                                    RemoteAction.SPOTIFY_AUTH_CODE -> {
+                                        cmd.valueString?.let { code ->
+                                            coroutineScope.launch(Dispatchers.IO) {
+                                                val clientId = settings.spotifyClientId
+                                                val clientSecret = settings.spotifyClientSecret.ifBlank { null }
+                                                val localIp = com.tx24.spicyplayer.playback.remote.NetworkUtils.getLocalIpAddress() ?: "127.0.0.1"
+                                                val redirectUri = "http://$localIp:${settings.remoteServerPort}/callback"
+                                                val client = com.tx24.spicyplayer.network.data.spotify.SpotifyWebApiClient()
+
+                                                val res = client.exchangeAuthCode(clientId, clientSecret ?: "", code, com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils.DEEP_LINK_REDIRECT)
+                                                    ?: client.exchangeAuthCode(clientId, clientSecret ?: "", code, com.tx24.spicyplayer.network.data.spotify.SpotifyAuthUtils.getLocalhostRedirect(settings.remoteServerPort))
+                                                    ?: client.exchangeAuthCode(clientId, clientSecret ?: "", code, redirectUri)
+
+                                                if (res != null && !res.refreshToken.isNullOrBlank()) {
+                                                    settings.spotifyAccessToken = ""
+                                                    settings.spotifyRefreshToken = res.refreshToken ?: ""
+                                                    settings.spotifyAccessToken = res.accessToken
+                                                    settings.spotifyCloudSyncEnabled = true
+                                                    broadcast(
+                                                        RemoteMessage(
+                                                            type = RemoteMessageType.CONFIG_SYNC,
+                                                            config = buildConfigPayload(),
+                                                        )
+                                                    )
+                                                    withContext(Dispatchers.Main) {
+                                                        Toast.makeText(context, t("Received Spotify authorization from controller!"), Toast.LENGTH_LONG).show()
+                                                    }
+                                                } else {
+                                                    withContext(Dispatchers.Main) {
+                                                        Toast.makeText(context, t("Received auth code from controller, but token exchange failed. Please check Client ID / Secret."), Toast.LENGTH_LONG).show()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else -> {}
+                                }
+                            }
+                        }
+                        RemoteMessageType.CONFIG_SYNC, RemoteMessageType.CONFIG_PUSH -> {
+                            msg.config?.let { c ->
+                                coroutineScope.launch(Dispatchers.Main) {
+                                    settings.withRemoteSync {
+                                        c.allSettings?.let { settings.importAllSettings(it) }
+                                        val k = c.settingKey
+                                        val v = c.settingValue
+                                        if (k != null && v != null) {
+                                            settings.updateSettingRaw(k, v)
+                                        }
+                                        c.owmApiKey?.let { settings.owmApiKey = it }
+                                        c.owmCity?.let { settings.owmCity = it }
+                                        c.owmUseCelsius?.let { settings.owmUseCelsius = it }
+                                        c.weatherRefreshIntervalMinutes?.let { settings.weatherRefreshIntervalMinutes = it }
+                                        c.showBatteryIndicator?.let { settings.showBatteryIndicator = it }
+                                        c.batteryIndicatorScale?.let { settings.batteryIndicatorScale = it }
+                                        c.appLanguage?.let {
+                                            settings.appLanguage = it
+                                            com.tx24.spicyplayer.i18n.I18n.appLanguage = it
+                                        }
+                                        if (!c.owmApiKey.isNullOrBlank() || !c.owmCity.isNullOrBlank()) {
+                                            viewModel.fetchWeather(settings.owmApiKey, settings.owmCity, force = true)
+                                        }
+                                        c.spotifyRefreshToken?.let { token ->
+                                            if (token.isNotBlank()) {
+                                                if (settings.spotifyRefreshToken != token) {
+                                                    settings.spotifyAccessToken = ""
+                                                }
+                                                settings.spotifyRefreshToken = token
+                                                settings.spotifyCloudSyncEnabled = true
+                                            } else {
+                                                settings.spotifyRefreshToken = ""
+                                            }
+                                        }
+                                        c.spotifyClientId?.let { settings.spotifyClientId = it }
+                                        c.spotifyClientSecret?.let { settings.spotifyClientSecret = it }
+                                        c.spotifyCloudSyncEnabled?.let { settings.spotifyCloudSyncEnabled = it }
+                                        c.spotifySyncIntervalSeconds?.let { settings.spotifySyncIntervalSeconds = it }
+                                        c.clock12h?.let { settings.clock12h = it }
+                                        c.showSeconds?.let { settings.clockShowSeconds = it }
+                                        c.showDate?.let { settings.smartClockShowDate = it }
+                                        c.showWeather?.let { settings.smartClockShowWeather = it }
+                                        c.showWeatherDetails?.let { settings.clockShowWeatherDetails = it }
+                                        c.showClockOnLyricsScreen?.let { settings.showClockOnLyricsScreen = it }
+                                        c.showWeatherOnLyricsScreen?.let { settings.showWeatherOnLyricsScreen = it }
+                                        c.clockScalePercent?.let { settings.clockScalePercent = it }
+                                        c.ambientClockScalePercent?.let { settings.ambientClockScalePercent = it }
+                                        c.lyricsSizePortrait?.let { settings.lyricsSizePortrait = it }
+                                        c.lyricsSizeLandscape?.let { settings.lyricsSizeLandscape = it }
+                                        c.lyricsSizePercent?.let {
+                                            if (c.lyricsSizePortrait == null) settings.lyricsSizePortrait = it
+                                            if (c.lyricsSizeLandscape == null) settings.lyricsSizeLandscape = it
+                                        }
+                                        c.rendererStyle?.let {
+                                            settings.rendererStyle = if (it == "Bloom") RendererStyle.Bloom else RendererStyle.Spring
+                                        }
+                                        c.nightMode?.let { settings.nightModeEnabled = it }
+                                        c.smartDisplayEnabled?.let { settings.smartDisplayEnabled = it }
+                                        c.ambientIdleTimeoutSeconds?.let { settings.smartDisplayIdleTimeoutSeconds = it }
+                                        c.minimalLyricsMode?.let { settings.minimalLyricsMode = it }
+                                        c.remoteDeviceName?.let { if (it.isNotBlank()) settings.remoteDeviceName = it }
+                                        c.nextUpCard?.let { settings.nextUpCard = it }
+                                        c.nextUpScalePercent?.let { settings.nextUpScalePercent = it }
+                                        c.pixelShiftEnabled?.let { settings.pixelShiftEnabled = it }
+                                    }
+
+                                    // Send ACK back; do NOT broadcast CONFIG_SYNC to avoid recursive ping-pong storms
+                                    broadcast(RemoteMessage(type = RemoteMessageType.CONFIG_ACK))
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+        } else null
+    }
+
+    DisposableEffect(remoteServer) {
+        LyricsActivity.remoteServerHolder = remoteServer
+        onDispose {
+            if (LyricsActivity.remoteServerHolder == remoteServer) {
+                LyricsActivity.remoteServerHolder = null
+            }
+            remoteServer?.stop()
+        }
+    }
+
+    LaunchedEffect(settings.remoteRole, remoteServer, isController) {
+        if (!isController && settings.remoteRole == RemoteRole.Receiver && remoteServer != null) {
+            remoteServer.start()
+            remoteNsd.registerService(settings.remoteDeviceName, settings.remoteServerPort)
+        } else {
+            remoteNsd.unregisterService()
+            remoteServer?.stop()
+        }
+    }
+
+    // State sync continuous broadcast every 1s when in Receiver mode
+    LaunchedEffect(remoteServer, isController) {
+        if (!isController && remoteServer != null) {
+            while (true) {
+                remoteServer.broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+                delay(1000L)
+            }
+        }
+    }
+
+    // Immediate state sync broadcast on song change or play/pause/ambient changes
+    LaunchedEffect(state.title, state.artist, state.isPlaying, smartAmbientActive, weather, isController) {
+        if (!isController && remoteServer != null) {
+            remoteServer.broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
+        }
+    }
+
+    // 5. Controller Client Setup
+    val remoteClient = remember { RemoteSocketClient(coroutineScope) }
+    DisposableEffect(remoteClient) {
+        LyricsActivity.remoteClientHolder = remoteClient
+        onDispose {
+            if (LyricsActivity.remoteClientHolder == remoteClient) {
+                LyricsActivity.remoteClientHolder = null
+            }
+            remoteClient.disconnect()
+        }
+    }
+
+    var targetHost by remember { mutableStateOf(settings.remoteTargetHost) }
+    var targetPort by remember { mutableIntStateOf(settings.remoteTargetPort) }
+    val isConnected by remoteClient.connected.collectAsState()
+    var showConnectModal by remember { mutableStateOf(false) }
+
+    LaunchedEffect(targetHost, targetPort, isSender) {
+        if (isSender && targetHost.isNotBlank()) {
+            remoteClient.connect(targetHost, targetPort)
+        }
+    }
+
+    androidx.compose.runtime.DisposableEffect(isSender, targetHost, targetPort) {
+        val lifecycleObserver = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                if (isSender && targetHost.isNotBlank() && !remoteClient.connected.value) {
+                    remoteClient.connect(targetHost, targetPort)
+                }
+            }
+        }
+        val lifecycle = (context as? androidx.lifecycle.LifecycleOwner)?.lifecycle
+        lifecycle?.addObserver(lifecycleObserver)
+        onDispose {
+            lifecycle?.removeObserver(lifecycleObserver)
+        }
+    }
+
+    LaunchedEffect(isConnected, isSender) {
+        if (isSender && isConnected) {
+            Toast.makeText(context, t("Connected to display: %s", targetHost), Toast.LENGTH_SHORT).show()
+            remoteClient.sendMessage(RemoteMessage(type = RemoteMessageType.REQUEST_STATE))
+            if (LyricsActivity.pendingSpotifyAuthCode != null) {
+                val code = LyricsActivity.pendingSpotifyAuthCode!!
+                remoteClient.sendMessage(
+                    RemoteMessage(
+                        type = RemoteMessageType.COMMAND,
+                        command = RemoteCommandPayload(
+                            action = RemoteAction.SPOTIFY_AUTH_CODE,
+                            valueString = code,
+                        ),
+                    )
+                )
+                Toast.makeText(context, t("Connected to display, transmitting Spotify authorization…"), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    LaunchedEffect(remoteClient, isSender) {
+        if (isSender) {
+            remoteClient.messages.collect { msg ->
+                when (msg.type) {
+                    RemoteMessageType.STATE_SYNC -> {
+                        if (!settings.remotePlaybackRedirectEnabled) {
+                            msg.state?.let { s ->
+                                viewModel.updateFromRemote(s)
+                                if (!isController) {
+                                    smartAmbientActive = s.ambientViewActive
+                                }
+                            }
+                        }
+                    }
+                    RemoteMessageType.CONFIG_SYNC -> {
+                        msg.config?.let { c ->
+                            coroutineScope.launch(Dispatchers.Main) {
+                                settings.withRemoteSync {
+                                    c.allSettings?.let { settings.importAllSettings(it) }
+                                    val k = c.settingKey
+                                    val v = c.settingValue
+                                    if (k != null && v != null) {
+                                        settings.updateSettingRaw(k, v)
+                                    }
+                                    c.owmApiKey?.let { settings.owmApiKey = it }
+                                    c.owmCity?.let { settings.owmCity = it }
+                                    c.owmUseCelsius?.let { settings.owmUseCelsius = it }
+                                    c.weatherRefreshIntervalMinutes?.let { settings.weatherRefreshIntervalMinutes = it }
+                                    c.showBatteryIndicator?.let { settings.showBatteryIndicator = it }
+                                    c.batteryIndicatorScale?.let { settings.batteryIndicatorScale = it }
+                                    c.appLanguage?.let {
+                                        settings.appLanguage = it
+                                        com.tx24.spicyplayer.i18n.I18n.appLanguage = it
+                                    }
+                                    c.spotifyClientId?.let { settings.spotifyClientId = it }
+                                    c.spotifyClientSecret?.let { settings.spotifyClientSecret = it }
+                                    c.spotifyRefreshToken?.let { token ->
+                                        settings.spotifyRefreshToken = token
+                                        if (token.isNotBlank() && LyricsActivity.pendingSpotifyAuthCode != null) {
+                                            LyricsActivity.pendingSpotifyAuthCode = null
+                                            Toast.makeText(context, t("Target display Spotify authorized successfully!"), Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                    c.spotifyCloudSyncEnabled?.let { settings.spotifyCloudSyncEnabled = it }
+                                    c.spotifySyncIntervalSeconds?.let { settings.spotifySyncIntervalSeconds = it }
+                                    c.clock12h?.let { settings.clock12h = it }
+                                    c.showSeconds?.let { settings.clockShowSeconds = it }
+                                    c.showDate?.let { settings.smartClockShowDate = it }
+                                    c.showWeather?.let { settings.smartClockShowWeather = it }
+                                    c.showWeatherDetails?.let { settings.clockShowWeatherDetails = it }
+                                    c.showClockOnLyricsScreen?.let { settings.showClockOnLyricsScreen = it }
+                                    c.showWeatherOnLyricsScreen?.let { settings.showWeatherOnLyricsScreen = it }
+                                    c.clockScalePercent?.let { settings.clockScalePercent = it }
+                                    c.ambientClockScalePercent?.let { settings.ambientClockScalePercent = it }
+                                    c.lyricsSizePortrait?.let { settings.lyricsSizePortrait = it }
+                                    c.lyricsSizeLandscape?.let { settings.lyricsSizeLandscape = it }
+                                    c.lyricsSizePercent?.let {
+                                        if (c.lyricsSizePortrait == null) settings.lyricsSizePortrait = it
+                                        if (c.lyricsSizeLandscape == null) settings.lyricsSizeLandscape = it
+                                    }
+                                    c.rendererStyle?.let {
+                                        settings.rendererStyle = if (it == "Bloom") RendererStyle.Bloom else RendererStyle.Spring
+                                    }
+                                    c.nightMode?.let { settings.nightModeEnabled = it }
+                                    c.smartDisplayEnabled?.let { settings.smartDisplayEnabled = it }
+                                    c.ambientIdleTimeoutSeconds?.let { settings.smartDisplayIdleTimeoutSeconds = it }
+                                    c.minimalLyricsMode?.let { settings.minimalLyricsMode = it }
+                                    c.remoteDeviceName?.let { if (it.isNotBlank()) settings.remoteDeviceName = it }
+                                    c.nextUpCard?.let { settings.nextUpCard = it }
+                                    c.nextUpScalePercent?.let { settings.nextUpScalePercent = it }
+                                    c.pixelShiftEnabled?.let { settings.pixelShiftEnabled = it }
+                                }
+                            }
+                        }
+                    }
+                    RemoteMessageType.COMMAND -> {
+                        msg.command?.let { cmd ->
+                            when (cmd.action) {
+                                RemoteAction.PLAY_PAUSE -> viewModel.playPause()
+                                RemoteAction.PLAY -> if (!viewModel.state.value.isPlaying) viewModel.playPause()
+                                RemoteAction.PAUSE -> if (viewModel.state.value.isPlaying) viewModel.playPause()
+                                RemoteAction.NEXT -> viewModel.skipNext()
+                                RemoteAction.PREV -> viewModel.skipPrevious()
+                                RemoteAction.SEEK -> cmd.valueLong?.let { viewModel.seekTo(it) }
+                                RemoteAction.CUSTOM_ACTION -> cmd.valueString?.let { viewModel.sendCustomAction(it) }
+                                RemoteAction.TOGGLE_SHUFFLE -> viewModel.sendCustomAction("spotify_shuffle")
+                                RemoteAction.CYCLE_REPEAT -> viewModel.sendCustomAction("spotify_repeat")
+                                else -> {}
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    // Stream phone local playback to the connected display
+    LaunchedEffect(isConnected, isSender, state.title, state.artist, state.isPlaying, state.artworkUri, state.queue) {
+        if (isSender && isConnected && state.title.isNotBlank()) {
+            remoteClient.sendMessage(RemoteMessage(type = RemoteMessageType.PLAYBACK_REDIRECT, state = buildStatePayload()))
+        }
+    }
+
+    LaunchedEffect(isConnected, isSender) {
+        if (isSender && isConnected) {
+            while (isActive) {
+                if (state.isPlaying && state.title.isNotBlank()) {
+                    remoteClient.sendMessage(RemoteMessage(type = RemoteMessageType.PLAYBACK_REDIRECT, state = buildStatePayload()))
+                }
+                delay(1000L)
+            }
+        }
+    }
+
     val lowPerformance = settings.lowPerformance
     val hideHeader = settings.hideHeader
     val romanizationAvailable = (state.lyrics as? LyricsState.Ready)?.let { ready ->
         ready.lines.any { line -> line.words.any { it.romanized != null } }
     } == true
     val romanize = settings.romanize && romanizationAvailable
+    val handleToggleRomanize = {
+        if (isController) {
+            remoteClient.sendCommand(RemoteAction.TOGGLE_ROMANIZE)
+        }
+        settings.romanize = !settings.romanize
+        UsageStats.count(UsageCounter.ROMANIZE)
+    }
     // The lyrics font: ours, the phone's, or the file picked in settings (ours again if it's gone).
     val lyricsFont = settings.lyricsFont
     val customFontFile = settings.customFontFile
@@ -581,7 +1475,7 @@ private fun LyricsApp(
         settings.startedEmpty || runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }
             .getOrNull()?.let { it.firstInstallTime == it.lastUpdateTime } == true
     }
-    val showIntro = (freshStart || settings.introReplay) && !settings.introDone
+    val showIntro = !isController && (freshStart || settings.introReplay) && !settings.introDone
     val answerUsageStats: (Boolean) -> Unit = { keep ->
         settings.usageStats = keep
         settings.usageStatsAsked = true
@@ -683,10 +1577,14 @@ private fun LyricsApp(
         MotionCovers.musicPaused = !state.isPlaying
     }
     // The panel's own loop: the same stream, so no second decode.
-    val stageMotion = rememberMotionCover(
-        StageArtChoice.wantsAnimated(settings.stageArt, settings.animatedCover, lowPerformance),
-        MotionCoverQuery(state.artist, state.album, state.title),
-    )
+    val stageMotion = if (isController) {
+        com.tx24.spicyplayer.ui.nowplaying.MotionCoverLookup(null, settled = true)
+    } else {
+        rememberMotionCover(
+            StageArtChoice.wantsAnimated(settings.stageArt, settings.animatedCover, lowPerformance),
+            MotionCoverQuery(state.artist, state.album, state.title),
+        )
+    }
     // The first picked picture the song has; with none, no stage for this song.
     val stagePicture = StageArtChoice.pick(
         arts = settings.stageArt,
@@ -697,11 +1595,15 @@ private fun LyricsApp(
         motionUrl = stageMotion.url.takeIf { stageMotion.settled },
     )
     // The big cover's own pick, in portrait. The canvas is the one held through a song change.
-    val portraitMotion = rememberMotionCover(
-        portraitAllowed && StageArtChoice.wantsAnimated(settings.bigCoverArt, settings.animatedCover, lowPerformance),
-        MotionCoverQuery(state.artist, state.album, state.title),
-        tall = true,
-    )
+    val portraitMotion = if (isController) {
+        com.tx24.spicyplayer.ui.nowplaying.MotionCoverLookup(null, settled = true)
+    } else {
+        rememberMotionCover(
+            portraitAllowed && StageArtChoice.wantsAnimated(settings.bigCoverArt, settings.animatedCover, lowPerformance),
+            MotionCoverQuery(state.artist, state.album, state.title),
+            tall = true,
+        )
+    }
     val portraitPicture = if (!portraitAllowed) null else StageArtChoice.pick(
         arts = settings.bigCoverArt,
         animatedCover = settings.animatedCover,
@@ -872,7 +1774,7 @@ private fun LyricsApp(
     var controlsVisible by remember { mutableStateOf(true) }
     // Touch times go to the idle timer only: nothing in composition reads them, so a drag
     // (a touch event every frame) doesn't recompose the whole screen.
-    val touches = remember { MutableStateFlow(0L) }
+    // (touches state is hoisted at top level of LyricsApp)
     // They stay while paused, and while the portrait big cover is up (it has nothing else to
     // show). On the landscape cover they always go, like the desktop page's once the mouse
     // rests: they'd keep the cover darkened.
@@ -881,7 +1783,20 @@ private fun LyricsApp(
         (headerExpanded && !landscape && shownPortrait !is StagePicture.Canvas) || !settings.autoHideControls
     val idleMs = settings.controlsHideDelay.millis
     // A key (remote, keyboard, gamepad) counts as a touch; a screen over the lyrics counts as shown.
-    SideEffect { keyInput.controlsShown = { controlsVisible || showSettings || showQuickSettings || showSpotifySearch } }
+    SideEffect {
+        keyInput.controlsShown = { controlsVisible || showSettings || showQuickSettings || showSpotifySearch }
+        keyInput.onMenu = { showSettings = !showSettings }
+        keyInput.onToggleAmbient = { smartAmbientActive = !smartAmbientActive }
+        keyInput.isAmbientActive = { smartAmbientActive }
+        keyInput.onWakeAmbient = {
+            smartAmbientActive = false
+            touches.value = SystemClock.uptimeMillis()
+        }
+    }
+    androidx.activity.compose.BackHandler(enabled = smartAmbientActive) {
+        smartAmbientActive = false
+        touches.value = SystemClock.uptimeMillis()
+    }
     // While something is open over the lyrics screen, a remote's arrows stay in it: the screen
     // underneath takes no focus, and gives up what it had as the overlay opens.
     val overSettings = showSpotifySearch || showLyricsManager
@@ -1170,22 +2085,23 @@ private fun LyricsApp(
                     customActions = if (settings.playerButtons) state.customActions else state.customActions.filter { it.kind != ActionKind.Other },
                     onCustomAction = { action ->
                         UsageStats.count(UsageCounter.PLAYER_ACTION)
-                        viewModel.sendCustomAction(action)
+                        if (isController) {
+                            remoteClient.sendCommand(RemoteAction.CUSTOM_ACTION, valueString = action)
+                        } else {
+                            viewModel.sendCustomAction(action)
+                        }
                     },
                     onResync = viewModel::resync,
                     // Only where a translation would help: not on songs already in the target language
                     // or one left untranslated, going by what the phone guesses before anything is sent.
                     onTranslate = viewModel::toggleTranslation.takeIf {
-                        state.lyrics is LyricsState.Ready && settings.translateButton && translateButtonHelps(
-                            state.translationEnabled,
-                            state.lyricsLanguageOverride ?: state.lyricsLanguage ?: state.guessedLanguage,
-                            state.translationPreferences,
-                        )
+                        state.lyrics is LyricsState.Ready && settings.translateButton
                     },
                     translated = state.translationEnabled && !state.translationFailed,
                     translating = state.translating,
                 )
                 val onEnterPipButton = onEnterPip.takeIf { settings.pipButton }
+                val onToggleAmbientButton = if (settings.smartDisplayButton) ({ smartAmbientActive = !smartAmbientActive }) else null
                 val onOpenLyricsManager = if (settings.lyricsManagerButton) ({ whenUnlocked { showLyricsManager = true } }) else null
                 val onOpenQuickSettings = if (settings.quickSettingsButton) ({ whenUnlocked { quickStart = QuickScreen.Main; showQuickSettings = true } }) else null
                 // The queue's own button opens quick settings on its queue screen.
@@ -1197,7 +2113,7 @@ private fun LyricsApp(
                 val expandButton = settings.expandButton || headerExpanded
                 // The Cover Art background's animated cover; a stream that fails is forgotten, like the header's.
                 val backgroundMotionQuery = MotionCoverQuery(state.artist, state.album, state.title)
-                val backgroundMotionUrl = rememberMotionCoverUrl(
+                val backgroundMotionUrl = if (isController) null else rememberMotionCoverUrl(
                     backgroundType == BackgroundType.CoverArt && settings.animatedBackground && !lowPerformance,
                     backgroundMotionQuery,
                 )
@@ -1205,7 +2121,7 @@ private fun LyricsApp(
                 // The animated cover the moving background follows: the header's own stream, so
                 // only while that setting is on. Under the big cover it's that stream instead, as
                 // they share one player.
-                val followMotionUrl = rememberMotionCoverUrl(
+                val followMotionUrl = if (isController) null else rememberMotionCoverUrl(
                     backgroundType == BackgroundType.Default && settings.backgroundFollowsMotion && settings.animatedCover &&
                         !lowPerformance && !settings.staticBackground && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
                     backgroundMotionQuery,
@@ -1243,7 +2159,8 @@ private fun LyricsApp(
                 val immersiveOpaque by remember { derivedStateOf { immersiveShown * expansion >= 1f } }
                 var failedFollowMotionUrl by remember { mutableStateOf<String?>(null) }
                 val motionScope = rememberCoroutineScope()
-                val stageInfo = NowPlayingInfo(state.title, state.artist, state.album, state.artwork, state.artworkUri, state.trackDirection, hasSession = state.sourcePackage != null)
+                val hasActiveSession = state.sourcePackage != null && state.title != "Nothing playing"
+                val stageInfo = NowPlayingInfo(state.title, state.artist, state.album, state.artwork, state.artworkUri, state.trackDirection, hasSession = hasActiveSession)
                 val releaseYear = ReleaseYear(state.releaseYear, state.releaseYearPending, settings.releaseYearPosition)
                 // Everything the glass controls blur.
                 Box(Modifier.fillMaxSize().then(backdrop?.let { Modifier.hazeSource(it) } ?: Modifier)) {
@@ -1251,10 +2168,10 @@ private fun LyricsApp(
                         artwork = state.artwork,
                         artworkUri = state.artworkUri,
                         isPlaying = state.isPlaying,
-                        hasSession = state.sourcePackage != null,
+                        hasSession = hasActiveSession,
                         modifier = Modifier.fillMaxSize(),
                         type = backgroundType,
-                        animate = !lowPerformance && !settings.staticBackground && ambientShown < 1f && !ambient,
+                        animate = !isController && !lowPerformance && !settings.staticBackground && ambientShown < 1f && !ambient,
                         blurDp = settings.backgroundBlurFor(backgroundType),
                         artistHeaderUrl = state.artistHeaderUrl,
                         artistHeaderPending = state.artistHeaderPending,
@@ -1431,10 +2348,7 @@ private fun LyricsApp(
                                 showResync = settings.resyncButton,
                                 showExpand = expandButton,
                                 romanized = romanize,
-                                onToggleRomanize = {
-                                    settings.romanize = !settings.romanize
-                                    UsageStats.count(UsageCounter.ROMANIZE)
-                                },
+                                onToggleRomanize = handleToggleRomanize,
                                 onOpenSettings = { whenUnlocked { showSettings = true } },
                                 onOpenLyricsManager = onOpenLyricsManager,
                                 onOpenQueue = onOpenQueue,
@@ -1467,7 +2381,7 @@ private fun LyricsApp(
                     if (landscape) landscapeMetrics.centred else headerMetrics.expanded(pageHeight - controlsHeightPx)
                 }
                 CompactNowPlayingHeader(
-                    info = NowPlayingInfo(state.title, state.artist, state.album, state.artwork, state.artworkUri, state.trackDirection, hasSession = state.sourcePackage != null),
+                    info = NowPlayingInfo(state.title, state.artist, state.album, state.artwork, state.artworkUri, state.trackDirection, hasSession = hasActiveSession),
                     releaseYear = releaseYear,
                     metrics = headerMetrics,
                     modifier = Modifier.padding(belowTop).graphicsLayer { alpha = 1f - ambientFade.value },
@@ -1496,16 +2410,14 @@ private fun LyricsApp(
                                     showResync = settings.resyncButton,
                                     showExpand = expandButton,
                                     romanized = romanize,
-                                    onToggleRomanize = {
-                                        settings.romanize = !settings.romanize
-                                        UsageStats.count(UsageCounter.ROMANIZE)
-                                    },
+                                    onToggleRomanize = handleToggleRomanize,
                                     onOpenSettings = { whenUnlocked { showSettings = true } },
                                     onOpenLyricsManager = onOpenLyricsManager,
                                     onOpenQueue = onOpenQueue,
                                     onOpenSource = onOpenSource,
                                     onOpenQuickSettings = onOpenQuickSettings,
                                     onEnterPip = onEnterPipButton,
+                                    onToggleAmbient = onToggleAmbientButton,
                                     expanded = headerExpanded,
                                     onToggleExpanded = expandButtonTapped,
                                     // Only beside the lyrics: the big cover sits in the middle.
@@ -1583,16 +2495,14 @@ private fun LyricsApp(
                         showResync = settings.resyncButton,
                         showExpand = expandButton,
                         romanized = romanize,
-                        onToggleRomanize = {
-                            settings.romanize = !settings.romanize
-                            UsageStats.count(UsageCounter.ROMANIZE)
-                        },
+                        onToggleRomanize = handleToggleRomanize,
                         onOpenSettings = { whenUnlocked { showSettings = true } },
                         onOpenLyricsManager = onOpenLyricsManager,
                         onOpenQueue = onOpenQueue,
                         onOpenSource = onOpenSource,
                         onOpenQuickSettings = onOpenQuickSettings,
                         onEnterPip = onEnterPipButton,
+                        onToggleAmbient = onToggleAmbientButton,
                         expanded = headerExpanded,
                         onToggleExpanded = expandButtonTapped,
                         interactive = controlsVisible && !controlsOnCover,
@@ -1609,6 +2519,7 @@ private fun LyricsApp(
                     entry = queuedNext ?: heldNext,
                     shown = { nextUpActive * (1f - if (bottomBar) controlsShown else 0f) },
                     onHeight = { nextUpHeightPx = it },
+                    scale = settings.nextUpScalePercent / 100f,
                     modifier = Modifier
                         .align(if (landscape) Alignment.BottomStart else Alignment.BottomCenter)
                         .padding(belowTop)
@@ -1667,17 +2578,140 @@ private fun LyricsApp(
                         },
                     )
                 }
+
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = settings.showClockOnLyricsScreen && !smartAmbientActive && !inPip && (!showSettings || settingsPeeking) &&
+                        (landscape || hideHeader) && !isController,
+                    enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(400)),
+                    exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(300)),
+                    modifier = Modifier
+                        .align(if (landscape) Alignment.TopStart else Alignment.TopCenter)
+                        .padding(
+                            top = maxOf(belowTop.calculateTopPadding(), 8.dp) + (if (landscape) 6.dp else 4.dp),
+                            start = if (landscape) maxOf(belowTop.calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current), 18.dp) else 16.dp,
+                            end = if (!landscape) 16.dp else 0.dp,
+                        )
+                        .zIndex(15f),
+                ) {
+                    com.tx24.spicyplayer.ui.ambient.SmartDisplayHeader(
+                        weather = weather,
+                        useCelsius = settings.owmUseCelsius,
+                        is12h = settings.clock12h,
+                        showSeconds = settings.clockShowSeconds,
+                        showDate = settings.smartClockShowDate,
+                        showWeather = settings.showWeatherOnLyricsScreen,
+                        showWeatherDetails = settings.clockShowWeatherDetails,
+                        clockScale = settings.clockScalePercent / 100f,
+                        onClick = {
+                            if (isController) {
+                                remoteClient.sendCommand(RemoteAction.TOGGLE_AMBIENT_VIEW)
+                            }
+                            smartAmbientActive = !smartAmbientActive
+                        },
+                    )
+                }
+
+                if (!inPip) {
+                    val pillShape = RoundedCornerShape(20.dp)
+                    val serverClientsCount by (remoteServer?.clientsCount ?: MutableStateFlow(0)).collectAsState()
+                    val showConnPill = isSender || (settings.remoteRole == RemoteRole.Receiver && serverClientsCount > 0)
+                    val showBattery = settings.showBatteryIndicator
+
+                    if (showConnPill || showBattery) {
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(
+                                    top = maxOf(belowTop.calculateTopPadding(), 8.dp) + (if (landscape) 6.dp else 4.dp),
+                                    end = if (landscape) maxOf(belowTop.calculateEndPadding(androidx.compose.ui.platform.LocalLayoutDirection.current), 18.dp) else 16.dp,
+                                )
+                                .zIndex(20f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (isSender) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(pillShape)
+                                        .background(SpicyColors.TintBg)
+                                        .border(1.dp, if (isConnected) SpicyColors.Hairline else SpicyColors.StatusDanger.copy(alpha = 0.5f), pillShape)
+                                        .clickable { showConnectModal = true }
+                                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isConnected) SpicyColors.StatusSuccess else SpicyColors.StatusDanger),
+                                        )
+                                        val connName = if (settings.remoteDeviceName.isNotBlank()) settings.remoteDeviceName else targetHost.ifBlank { "Display" }
+                                        val connText = if (isConnected) com.tx24.spicyplayer.i18n.t("Connected: %s", connName) else com.tx24.spicyplayer.i18n.t("Not connected · Tap to connect")
+                                        Text(
+                                            text = connText,
+                                            style = SpicyType.Caption.copy(
+                                                color = if (isConnected) SpicyColors.TextPrimary else SpicyColors.TextSecondary,
+                                                fontWeight = FontWeight.Medium,
+                                            ),
+                                        )
+                                    }
+                                }
+                            } else if (settings.remoteRole == RemoteRole.Receiver && serverClientsCount > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(pillShape)
+                                        .background(SpicyColors.TintBg)
+                                        .border(1.dp, SpicyColors.StatusSuccess.copy(alpha = 0.4f), pillShape)
+                                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.Smartphone,
+                                            contentDescription = null,
+                                            tint = SpicyColors.StatusSuccess,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                        Text(
+                                            text = com.tx24.spicyplayer.i18n.t("Remote connected (%d)", serverClientsCount),
+                                            style = SpicyType.Caption.copy(color = SpicyColors.TextPrimary, fontWeight = FontWeight.Medium),
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (showBattery) {
+                                com.tx24.spicyplayer.ui.components.BatteryIndicator(scale = settings.batteryIndicatorScale / 100f)
+                            }
+                        }
+                    }
+                }
             }
         }
         }
 
         // Coming back from the system's settings refreshes the grant (onResume), which closes it.
+        var dismissNotificationAccessModal by remember { mutableStateOf(false) }
         SpicyModal(
-            visible = !state.accessGranted && !showIntro,
-            onDismissRequest = null,
+            visible = !isController && !state.accessGranted && !showIntro && !dismissNotificationAccessModal && !settings.bypassNotificationAccess && !settings.spotifyCloudSyncEnabled && (settings.remoteRole != RemoteRole.Receiver),
+            onDismissRequest = {
+                dismissNotificationAccessModal = true
+                settings.bypassNotificationAccess = true
+            },
             backdrop = backdrop,
         ) {
-            NotificationAccessMessage(openNotificationAccess)
+            NotificationAccessMessage(
+                openNotificationAccess,
+                onDismiss = {
+                    dismissNotificationAccessModal = true
+                    settings.bypassNotificationAccess = true
+                },
+            )
         }
 
         // Once, after access is sorted, for new installs and updates alike; nothing is sent before it's answered.
@@ -1758,6 +2792,8 @@ private fun LyricsApp(
                 onClosed = { showSettings = false; settingsPages = emptyList(); viewModel.customSourceForm = null },
                 onOpenLyricsManager = { whenUnlocked { showLyricsManager = true } },
                 onOpenSpotifySearch = { whenUnlocked { showSpotifySearch = true } },
+                onToggleAmbient = { smartAmbientActive = !smartAmbientActive; showSettings = false },
+                onOpenConnectModal = { showConnectModal = true },
                 onPeekChange = { settingsPeeking = it },
                 restorePages = settingsPages,
                 onPagesChange = { settingsPages = it },
@@ -1782,6 +2818,63 @@ private fun LyricsApp(
             backdrop = backdrop,
             onDismissRequest = { showSpotifySearch = false },
         )
+
+        RemoteConnectModal(
+            visible = showConnectModal,
+            onDismissRequest = { showConnectModal = false },
+            settings = settings,
+            nsdHelper = remoteNsd,
+            client = remoteClient,
+            backdrop = backdrop,
+            onConnect = { host, port ->
+                settings.remoteTargetHost = host
+                settings.remoteTargetPort = port
+                targetHost = host
+                targetPort = port
+                remoteClient.connect(host, port)
+            },
+        )
+
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !isController && (settings.smartDisplayEnabled || smartAmbientActive) && smartAmbientActive && !inPip,
+            enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(1000)),
+            exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(800)),
+        ) {
+            SmartAmbientView(
+                weather = weather,
+                isNightMode = settings.nightModeEnabled,
+                pixelShiftEnabled = settings.pixelShiftEnabled,
+                useCelsius = settings.owmUseCelsius,
+                is12h = settings.clock12h,
+                showSeconds = settings.clockShowSeconds,
+                showDate = settings.smartClockShowDate,
+                showWeather = settings.smartClockShowWeather,
+                showWeatherDetails = settings.clockShowWeatherDetails,
+                clockScale = settings.ambientClockScalePercent / 100f,
+                nowPlayingTitle = state.title,
+                nowPlayingArtist = state.artist,
+                isPlaying = state.isPlaying,
+                showBatteryIndicator = settings.showBatteryIndicator,
+                batteryScale = settings.batteryIndicatorScale / 100f,
+                onWakeRequested = {
+                    if (isController) {
+                        remoteClient.sendCommand(RemoteAction.TOGGLE_AMBIENT_VIEW)
+                    }
+                    smartAmbientActive = false
+                    touches.value = android.os.SystemClock.uptimeMillis()
+                },
+                onOpenSettings = {
+                    smartAmbientActive = false
+                    whenUnlocked { showSettings = true }
+                },
+                onToggleNightMode = {
+                    if (isController) {
+                        remoteClient.sendCommand(RemoteAction.TOGGLE_NIGHT_MODE)
+                    }
+                    settings.nightModeEnabled = !settings.nightModeEnabled
+                },
+            )
+        }
 
         // Over settings, where sources are switched on. Kept through the closing animation.
         var lastDisclosure by remember { mutableStateOf<SourceDisclosure?>(null) }
@@ -1860,7 +2953,7 @@ private fun PipLyrics(
             modifier = Modifier.fillMaxSize(),
             type = settings.backgroundType,
             // Held still once the Canvas backdrop covers it, as on the full screen.
-            animate = !lowPerformance && !settings.staticBackground && canvasShown < 1f,
+            animate = (settings.remoteRole != RemoteRole.Sender) && !lowPerformance && !settings.staticBackground && canvasShown < 1f,
             blurDp = settings.backgroundBlurFor(settings.backgroundType),
             artistHeaderUrl = state.artistHeaderUrl,
             artistHeaderPending = state.artistHeaderPending,
@@ -2042,58 +3135,69 @@ private fun ScrollToActiveButton(
 
 /** Asks for the notification-listener grant, which is how Android hands out media sessions. */
 @Composable
-private fun NotificationAccessMessage(openNotificationAccess: () -> Unit) {
+private fun NotificationAccessMessage(openNotificationAccess: () -> Unit, onDismiss: () -> Unit = {}) {
     SpicyModalMessage(
-        title = "Allow notification access",
-        description = "Spicy Lyrics Mobile reads the song playing in your music app, and controls it, through its media " +
-            "notification. Android files that under notification access. You can turn it off again in system settings.",
+        title = t("Allow notification access"),
+        description = t(
+            "Spicy Lyrics Mobile reads the song playing in your music app, and controls it, through its media " +
+                "notification. Android files that under notification access. You can turn it off again in system settings."
+        ),
         icon = {
             Icon(Icons.Rounded.NotificationsActive, null, Modifier.size(24.dp), tint = SpicyColors.TextPrimary)
         },
     )
     SpicyModalGap()
-    SpicyModalButton("Open notification access", openNotificationAccess, style = SpicyButtonStyle.Primary, fill = true)
+    SpicyModalButton(t("Open notification access"), openNotificationAccess, style = SpicyButtonStyle.Primary, fill = true)
+    SpicyModalGap()
+    SpicyModalButton(t("Continue as Smart Display / Cloud Mode"), onDismiss, style = SpicyButtonStyle.Quiet, fill = true)
 }
 
 /** The one-time notice for the anonymous usage stats, which are on unless turned off here. */
 @Composable
 private fun UsageStatsMessage(onAnswer: (keepOn: Boolean) -> Unit) {
     SpicyModalMessage(
-        title = "Anonymous usage stats",
-        description = "Spicy Lyrics Mobile sends a small anonymous report a few times a day: the app and Android version, " +
-            "your phone model and country, and which features you use. Never what you listen to. It shows what's " +
-            "worth working on. You can change this in Settings → Advanced.",
+        title = t("Anonymous usage stats"),
+        description = t(
+            "Spicy Lyrics Mobile sends a small anonymous report a few times a day: the app and Android version, " +
+                "your phone model and country, and which features you use. Never what you listen to. It shows what's " +
+                "worth working on. You can change this in Settings → Advanced."
+        ),
         icon = { Icon(Icons.Rounded.Insights, null, Modifier.size(24.dp), tint = SpicyColors.TextPrimary) },
     )
     SpicyModalActions {
-        SpicyModalButton("Turn off", { onAnswer(false) })
-        SpicyModalButton("Keep on", { onAnswer(true) }, style = SpicyButtonStyle.Primary)
+        SpicyModalButton(t("Turn off"), { onAnswer(false) })
+        SpicyModalButton(t("Keep on"), { onAnswer(true) }, style = SpicyButtonStyle.Primary)
     }
 }
 
 @Composable
 private fun SwitchedOffMessage(title: String, text: String, onDismiss: () -> Unit, onOpenSettings: () -> Unit) {
     SpicyModalMessage(
-        title = title,
-        description = text,
+        title = t(title),
+        description = t(text),
         icon = { Icon(Icons.Rounded.Info, null, Modifier.size(24.dp), tint = SpicyColors.TextPrimary) },
     )
     SpicyModalActions {
-        SpicyModalButton("Open settings", onOpenSettings)
-        SpicyModalButton("Got it", onDismiss, style = SpicyButtonStyle.Primary)
+        SpicyModalButton(t("Open settings"), onOpenSettings)
+        SpicyModalButton(t("Got it"), onDismiss, style = SpicyButtonStyle.Primary)
     }
 }
 
 @Composable
 private fun SourceDisclosureMessage(disclosure: SourceDisclosure, onAccept: () -> Unit, onCancel: () -> Unit) {
+    val title = if (disclosure.name.equals("translation", ignoreCase = true)) {
+        t("Turn on translation?")
+    } else {
+        t("Turn on %s?", t(disclosure.name))
+    }
     SpicyModalMessage(
-        title = "Turn on ${disclosure.name}?",
-        description = disclosure.description,
+        title = title,
+        description = I18n.localizeDisclosureDescription(disclosure),
         icon = { Icon(Icons.Rounded.Public, null, Modifier.size(24.dp), tint = SpicyColors.TextPrimary) },
     )
     SpicyModalActions {
-        SpicyModalButton("Cancel", onCancel)
-        SpicyModalButton("Turn on", onAccept, style = SpicyButtonStyle.Primary)
+        SpicyModalButton(t("Cancel"), onCancel)
+        SpicyModalButton(t("Turn on"), onAccept, style = SpicyButtonStyle.Primary)
     }
 }
 
@@ -2125,25 +3229,25 @@ private fun UpdatePopup(update: UpdateUiState, updater: UpdateViewModel, backdro
         backdrop = backdrop,
     ) {
         if (release == null) return@SpicyModal
-        SpicyModalHeading("Update available", release.name.takeIf { it != release.tag && it != release.version })
+        SpicyModalHeading(t("Update available"), release.name.takeIf { it != release.tag && it != release.version })
         SpicyVersionRow(BuildConfig.VERSION_NAME, release.version)
         val status = when (val current = shown) {
-            is UpdateStatus.Installing -> "Confirm the install in Android's prompt."
-            is UpdateStatus.ReadyToInstall -> "Downloaded. Tap Install to confirm it in Android's prompt."
+            is UpdateStatus.Installing -> t("Confirm the install in Android's prompt.")
+            is UpdateStatus.ReadyToInstall -> t("Downloaded. Tap Install to confirm it in Android's prompt.")
             is UpdateStatus.Failed -> current.message
             else -> null
         }
         (shown as? UpdateStatus.Downloading)?.let { DownloadProgress(it.progress) }
-            ?: SpicyModalNotes(release.notes, status ?: "No notes for this version.".takeIf { release.notes.isEmpty })
+            ?: SpicyModalNotes(release.notes, status ?: t("No notes for this version.").takeIf { release.notes.isEmpty })
         SpicyModalGap()
         val busy = shown is UpdateStatus.Downloading || shown is UpdateStatus.Installing
         val ready = shown is UpdateStatus.ReadyToInstall
         SpicyModalActions {
-            if (!busy && !ready) SpicyModalButton("Skip this version", updater::skip, style = SpicyButtonStyle.Quiet)
-            SpicyModalButton(if (busy) "Hide" else "Later", updater::later)
+            if (!busy && !ready) SpicyModalButton(t("Skip this version"), updater::skip, style = SpicyButtonStyle.Quiet)
+            SpicyModalButton(if (busy) t("Hide") else t("Later"), updater::later)
             when {
-                ready -> SpicyModalButton("Install", { updater.confirmInstall(context) }, style = SpicyButtonStyle.Primary)
-                !busy -> SpicyModalButton(if (shown is UpdateStatus.Failed) "Try again" else "Update", startUpdate, style = SpicyButtonStyle.Primary)
+                ready -> SpicyModalButton(t("Install"), { updater.confirmInstall(context) }, style = SpicyButtonStyle.Primary)
+                !busy -> SpicyModalButton(if (shown is UpdateStatus.Failed) t("Try again") else t("Update"), startUpdate, style = SpicyButtonStyle.Primary)
             }
         }
     }
@@ -2165,7 +3269,7 @@ private fun DownloadProgress(progress: Float) {
             Box(Modifier.fillMaxHeight().fillMaxWidth(shown).clip(CircleShape).background(Color.White))
         }
         Text(
-            "Downloading… ${(progress * 100).roundToInt()}%",
+            t("Downloading… %d%%", (progress * 100).roundToInt()),
             style = SpicyType.Footnote.copy(color = SpicyColors.TextSecondary, fontFeatureSettings = "tnum"),
         )
     }
@@ -2177,14 +3281,14 @@ private fun OpenProfileMessage(line: FooterLine, onDismiss: () -> Unit) {
     val uriHandler = LocalUriHandler.current
     val url = line.profileUrl ?: return
     SpicyModalMessage(
-        title = line.name?.let { "Open @$it's profile?" } ?: "Open this profile?",
+        title = line.name?.let { t("Open @%s's profile?", it) } ?: t("Open this profile?"),
         description = url.removePrefix("https://").substringBefore('/'),
         icon = { Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, Modifier.size(24.dp), tint = SpicyColors.TextPrimary) },
     )
     SpicyModalGap()
     SpicyModalActions {
-        SpicyModalButton("Cancel", onDismiss)
-        SpicyModalButton("Open", {
+        SpicyModalButton(t("Cancel"), onDismiss)
+        SpicyModalButton(t("Open"), {
             onDismiss()
             runCatching { uriHandler.openUri(url) }
         }, style = SpicyButtonStyle.Primary)
@@ -2194,13 +3298,15 @@ private fun OpenProfileMessage(line: FooterLine, onDismiss: () -> Unit) {
 @Composable
 private fun SpotifyLimitMessage(limit: PlayerLimit, onDismiss: () -> Unit) {
     val (title, description) = when (limit) {
-        PlayerLimit.Seek -> "Seeking needs Spotify Premium" to
-            "Spotify Free doesn't let other apps move around in a song, so tapping a line or dragging " +
-            "the timeline can't jump there. Playback carries on as normal."
-        PlayerLimit.Previous -> "Going back needs Spotify Premium" to
-            "Spotify Free doesn't allow going back to the previous song from here."
-        PlayerLimit.Skips -> "Spotify isn't skipping" to
-            "Spotify Free stops allowing skips for a while after a few. Skipping works again later."
+        PlayerLimit.Seek -> t("Seeking needs Spotify Premium") to
+            t(
+                "Spotify Free doesn't let other apps move around in a song, so tapping a line or dragging " +
+                    "the timeline can't jump there. Playback carries on as normal."
+            )
+        PlayerLimit.Previous -> t("Going back needs Spotify Premium") to
+            t("Spotify Free doesn't allow going back to the previous song from here.")
+        PlayerLimit.Skips -> t("Spotify isn't skipping") to
+            t("Spotify Free stops allowing skips for a while after a few. Skipping works again later.")
     }
     SpicyModalMessage(
         title = title,
@@ -2208,7 +3314,7 @@ private fun SpotifyLimitMessage(limit: PlayerLimit, onDismiss: () -> Unit) {
         icon = { Icon(Icons.Rounded.Info, null, Modifier.size(24.dp), tint = SpicyColors.TextPrimary) },
     )
     SpicyModalGap()
-    SpicyModalButton("Got it", onDismiss, style = SpicyButtonStyle.Primary, fill = true)
+    SpicyModalButton(t("Got it"), onDismiss, style = SpicyButtonStyle.Primary, fill = true)
 }
 
 @Composable
@@ -2300,7 +3406,13 @@ private fun LyricsPanelContent(
     visible: () -> Boolean = { true },
 ) {
     when (lyrics) {
-        LyricsState.Idle -> LyricsNotice("Waiting for a song", modifier, bottomPx = noticeBottomPx, compact = noticeActions == null)
+        LyricsState.Idle -> LyricsNotice(
+            title = "Waiting for a song",
+            body = "Play music in any app, or use Spicy as a 24/7 Smart Clock & Weather Display.",
+            modifier = modifier,
+            bottomPx = noticeBottomPx,
+            compact = noticeActions == null,
+        )
         LyricsState.Loading -> Unit
         is LyricsState.Error -> LyricsNotice(lyrics, noticeActions, noticeBottomPx, modifier)
         is LyricsState.Ready -> {

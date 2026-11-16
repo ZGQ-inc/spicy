@@ -48,6 +48,9 @@ import com.tx24.spicyplayer.network.data.TrackNameCleaner
 import com.tx24.spicyplayer.network.data.LyricsOrigins
 import com.tx24.spicyplayer.network.data.TrafficCounter
 import com.tx24.spicyplayer.network.data.counted
+import com.tx24.spicyplayer.network.data.spotify.SpotifyCloudPlayback
+import com.tx24.spicyplayer.network.data.weather.CurrentWeather
+import com.tx24.spicyplayer.network.data.weather.OwmWeatherClient
 import com.tx24.spicyplayer.network.data.measuredQuality
 import com.tx24.spicyplayer.network.data.SpicyLyricsKey
 import com.tx24.spicyplayer.translation.*
@@ -56,6 +59,11 @@ import com.tx24.spicyplayer.network.data.LyricsCapability
 import com.tx24.spicyplayer.network.data.measuredQuality
 import com.tx24.spicyplayer.network.data.SourceDisclosure
 import com.tx24.spicyplayer.network.data.SourceDisclosures
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.RepeatOne
+import com.tx24.spicyplayer.ui.nowplaying.SessionCustomAction
 import com.tx24.spicyplayer.network.data.LyricsSourceSettings
 import com.tx24.spicyplayer.network.data.RemoteLyricsPolicy
 import com.tx24.spicyplayer.network.data.SourcePair
@@ -72,7 +80,6 @@ import com.tx24.spicyplayer.network.data.spotify.SpotifyTrackCandidate
 import com.tx24.spicyplayer.network.data.spotify.StaticPace
 import com.tx24.spicyplayer.lyrics.spicy.canvas.kawarp.MotionSource
 import com.tx24.spicyplayer.lyrics.spicy.canvas.kawarp.TrackMotion
-import com.tx24.spicyplayer.ui.nowplaying.SessionCustomAction
 import com.tx24.spicyplayer.ui.nowplaying.TrackDirection
 import com.tx24.spicyplayer.ui.settings.CustomSourceForm
 import java.util.concurrent.ConcurrentHashMap
@@ -166,6 +173,28 @@ private const val COVER_THUMB_PX = 128
  * or ignores it. Android can't tell which plan an account is on, so this is how it shows.
  */
 enum class PlayerLimit { Seek, Previous, Skips }
+
+fun defaultSpotifyCustomActions(
+    shuffleState: Boolean = false,
+    repeatState: String = "off",
+): List<SessionCustomAction> = listOf(
+    SessionCustomAction(
+        action = "spotify_shuffle",
+        name = if (shuffleState) "Shuffle on" else "Shuffle off",
+        vectorIcon = com.tx24.spicyplayer.ui.controls.SpotifyIcons.Shuffle,
+        isActive = shuffleState,
+    ),
+    SessionCustomAction(
+        action = "spotify_repeat",
+        name = when (repeatState) {
+            "track" -> "Repeat one"
+            "context" -> "Repeat all"
+            else -> "Repeat off"
+        },
+        vectorIcon = if (repeatState == "track") com.tx24.spicyplayer.ui.controls.SpotifyIcons.RepeatOne else com.tx24.spicyplayer.ui.controls.SpotifyIcons.Repeat,
+        isActive = repeatState != "off",
+    ),
+)
 
 data class PlayerUiState(
     val accessGranted: Boolean = false,
@@ -348,7 +377,117 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     /** Short notes on what an action did ("Removed from Local DB."), shown as toasts. */
     val messages: SharedFlow<String> = mutableMessages
 
+    var isCloudSessionActive = false
+        internal set
+    var isRemoteSessionActive = false
+        internal set
+    var isControllerMode: () -> Boolean = { false }
+    val isController get() = isControllerMode()
+    private val _cloudSpotifyManagerFlow = MutableStateFlow<SpotifyCloudManager?>(null)
+    val cloudSpotifyManagerFlow: StateFlow<SpotifyCloudManager?> = _cloudSpotifyManagerFlow.asStateFlow()
+    var cloudSpotifyManager: SpotifyCloudManager?
+        get() = _cloudSpotifyManagerFlow.value
+        set(value) {
+            _cloudSpotifyManagerFlow.value = value
+        }
+    private var hasEverPlayedLocally = false
+
+    fun isLocalPlaybackActive(): Boolean = controller?.playbackState?.let {
+        it.state == PlaybackState.STATE_PLAYING || it.state in IN_BETWEEN_STATES
+    } == true
+
+    fun resetToIdleState() {
+        val now = SystemClock.elapsedRealtime()
+        hasEverPlayedLocally = false
+        currentTrackIdentity = null
+        currentLyricsKey = null
+        lyricsKeyTaken = false
+        manualSpotifyId = null
+        pendingCommand = null
+        pendingSkip = null
+        lyricsJob?.cancel()
+        extrasJob?.cancel()
+        clock.reset(now)
+        awaitingTrackReport = false
+        shownSelection = null
+        temporaryLyrics = null
+        clearTranslation()
+        guessedDocument = null
+
+        val kept = mutableState.value
+        mutableState.value = PlayerUiState(
+            accessGranted = kept.accessGranted,
+            sourcePackage = null,
+            playerLabel = null,
+            title = "Nothing playing",
+            artist = "Start playback in another app",
+            album = "",
+            durationMs = 0L,
+            isPlaying = false,
+            canSeek = false,
+            artwork = null,
+            artworkUri = null,
+            lyrics = LyricsState.Idle,
+            customActions = defaultSpotifyCustomActions(false, "off"),
+            queue = emptyList(),
+            translationPreferences = kept.translationPreferences,
+            translationEnabled = kept.translationEnabled,
+            deepLKeyPresent = kept.deepLKeyPresent,
+            translationKeys = kept.translationKeys,
+            aiTranslation = kept.aiTranslation,
+            onDeviceModel = kept.onDeviceModel,
+            onDeviceDownloadedBytes = kept.onDeviceDownloadedBytes,
+            humanRomanizations = kept.humanRomanizations,
+            splitBackgroundVocals = kept.splitBackgroundVocals,
+            keepLyricsLonger = kept.keepLyricsLonger,
+            writtenRomaji = kept.writtenRomaji,
+            sourceDisclosure = kept.sourceDisclosure,
+            switchedOffSources = kept.switchedOffSources,
+            ownKeyHint = kept.ownKeyHint,
+            localLyrics = kept.localLyrics,
+            customSources = kept.customSources,
+            lyricsFolder = kept.lyricsFolder,
+            lyricsFolderScanning = kept.lyricsFolderScanning,
+            outputLabel = outputRoute.label,
+            lyricDelayMs = outputProfiles.delayMs(outputRoute),
+            sourceDescriptors = lyricsBackend.descriptors + lyricsBackend.blendDescriptors,
+            sourcePolicy = lyricsBackend.policy(),
+        )
+    }
+
+    val weatherClient = OwmWeatherClient().apply {
+        logger = { android.util.Log.d("OwmWeather", it) }
+    }
+    private val mutableWeather = MutableStateFlow<CurrentWeather?>(null)
+    val weather: StateFlow<CurrentWeather?> = mutableWeather.asStateFlow()
+
+    fun fetchWeather(apiKey: String, city: String?, force: Boolean = false) {
+        val trimmedKey = apiKey.trim()
+        val trimmedCity = city?.trim().orEmpty()
+        if (trimmedKey.isBlank() && trimmedCity.isBlank()) {
+            android.util.Log.d("OwmWeather", "fetchWeather skipped: both API key and city are blank")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            weatherClient.setStatusConnecting()
+            val lang = if (com.tx24.spicyplayer.i18n.I18n.isChinese()) "zh_cn" else "en"
+            val result = weatherClient.getWeather(trimmedKey, trimmedCity, force, lang)
+            if (result != null) {
+                mutableWeather.value = result
+            }
+        }
+    }
+
+    fun updateWeather(weather: CurrentWeather?) {
+        mutableWeather.value = weather
+    }
+
     fun toggleTranslation() {
+        if (isController) {
+            com.tx24.spicyplayer.LyricsActivity.remoteClientHolder?.sendCommand(com.tx24.spicyplayer.playback.remote.RemoteAction.TOGGLE_TRANSLATE)
+            mutableState.value = mutableState.value.copy(translationEnabled = !mutableState.value.translationEnabled)
+            return
+        }
         UsageStats.count(UsageCounter.TRANSLATE)
         // After a failure the button shows off, so a tap tries again instead of turning it off.
         if (mutableState.value.translationEnabled && mutableState.value.translationFailed) {
@@ -769,6 +908,10 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     fun refresh() {
         refreshOutputRoute()
         if (SystemClock.elapsedRealtime() - lastFolderScanAt >= FOLDER_RESCAN_MS) rescanLyricsFolder()
+        if (isController) {
+            mutableState.value = mutableState.value.copy(accessGranted = true)
+            return
+        }
         // The grant is per listener class, not per app: after the class moves, the package can
         // still be listed while this component is not, and every session read is refused.
         val granted = Settings.Secure.getString(getApplication<Application>().contentResolver, "enabled_notification_listeners")
@@ -802,23 +945,79 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     }
 
     fun playPause() {
+        val now = SystemClock.elapsedRealtime()
+        val server = com.tx24.spicyplayer.LyricsActivity.remoteServerHolder
+        if (isRemoteSessionActive && server != null) {
+            server.broadcast(com.tx24.spicyplayer.playback.remote.RemoteMessage(
+                type = com.tx24.spicyplayer.playback.remote.RemoteMessageType.COMMAND,
+                command = com.tx24.spicyplayer.playback.remote.RemoteCommandPayload(action = com.tx24.spicyplayer.playback.remote.RemoteAction.PLAY_PAUSE),
+            ))
+            val expectPlaying = !mutableState.value.isPlaying
+            mutableState.value = mutableState.value.copy(isPlaying = expectPlaying)
+            clock.updatePlaying(expectPlaying, if (expectPlaying) 1f else 0f, now)
+            return
+        }
+        if (isController) {
+            com.tx24.spicyplayer.LyricsActivity.remoteClientHolder?.sendCommand(com.tx24.spicyplayer.playback.remote.RemoteAction.PLAY_PAUSE)
+            val expectPlaying = !mutableState.value.isPlaying
+            mutableState.value = mutableState.value.copy(isPlaying = expectPlaying)
+            clock.updatePlaying(expectPlaying, if (expectPlaying) 1f else 0f, now)
+            return
+        }
+        if (isCloudSessionActive && cloudSpotifyManager != null) {
+            val expectPlaying = !mutableState.value.isPlaying
+            if (expectPlaying) cloudSpotifyManager?.play() else cloudSpotifyManager?.pause()
+            mutableState.value = mutableState.value.copy(isPlaying = expectPlaying)
+            clock.updatePlaying(expectPlaying, if (expectPlaying) 1f else 0f, now)
+            return
+        }
         val active = controller ?: return
         val expectPlaying = active.playbackState?.state != PlaybackState.STATE_PLAYING
-        pendingCommand = PendingCommand.PlayState(expectPlaying, SystemClock.elapsedRealtime())
-        // Only the button changes now. The clock waits for the player's report: the song goes on
-        // for a moment after a pause is sent (and starts a moment after a play), and stopping the
-        // lyrics on the tap lost that moment on every pause.
+        pendingCommand = PendingCommand.PlayState(expectPlaying, now)
+        clock.updatePlaying(expectPlaying, if (expectPlaying) 1f else 0f, now)
         if (expectPlaying) active.transportControls.play() else active.transportControls.pause()
         mutableState.value = mutableState.value.copy(isPlaying = expectPlaying)
     }
 
     fun skipNext() {
+        val server = com.tx24.spicyplayer.LyricsActivity.remoteServerHolder
+        if (isRemoteSessionActive && server != null) {
+            server.broadcast(com.tx24.spicyplayer.playback.remote.RemoteMessage(
+                type = com.tx24.spicyplayer.playback.remote.RemoteMessageType.COMMAND,
+                command = com.tx24.spicyplayer.playback.remote.RemoteCommandPayload(action = com.tx24.spicyplayer.playback.remote.RemoteAction.NEXT),
+            ))
+            return
+        }
+        if (isController) {
+            com.tx24.spicyplayer.LyricsActivity.remoteClientHolder?.sendCommand(com.tx24.spicyplayer.playback.remote.RemoteAction.NEXT)
+            return
+        }
+        if (isCloudSessionActive && cloudSpotifyManager != null) {
+            cloudSpotifyManager?.next()
+            return
+        }
         pendingSkip = TrackDirection.Forward to SystemClock.elapsedRealtime()
         watchForRefusedSkip(PlayerLimit.Skips, PlaybackState.ACTION_SKIP_TO_NEXT)
         commandForTrackChange { skipToNext() }
     }
 
     fun skipPrevious() {
+        val server = com.tx24.spicyplayer.LyricsActivity.remoteServerHolder
+        if (isRemoteSessionActive && server != null) {
+            server.broadcast(com.tx24.spicyplayer.playback.remote.RemoteMessage(
+                type = com.tx24.spicyplayer.playback.remote.RemoteMessageType.COMMAND,
+                command = com.tx24.spicyplayer.playback.remote.RemoteCommandPayload(action = com.tx24.spicyplayer.playback.remote.RemoteAction.PREV),
+            ))
+            return
+        }
+        if (isController) {
+            com.tx24.spicyplayer.LyricsActivity.remoteClientHolder?.sendCommand(com.tx24.spicyplayer.playback.remote.RemoteAction.PREV)
+            return
+        }
+        if (isCloudSessionActive && cloudSpotifyManager != null) {
+            cloudSpotifyManager?.previous()
+            return
+        }
         pendingSkip = TrackDirection.Backward to SystemClock.elapsedRealtime()
         watchForRefusedSkip(PlayerLimit.Previous, PlaybackState.ACTION_SKIP_TO_PREVIOUS)
         commandForTrackChange { skipToPrevious() }
@@ -897,6 +1096,31 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
 
     /** Presses one of the player's own buttons (see [PlayerUiState.customActions]). */
     fun sendCustomAction(action: String) {
+        val server = com.tx24.spicyplayer.LyricsActivity.remoteServerHolder
+        if (isRemoteSessionActive && server != null) {
+            server.broadcast(com.tx24.spicyplayer.playback.remote.RemoteMessage(
+                type = com.tx24.spicyplayer.playback.remote.RemoteMessageType.COMMAND,
+                command = com.tx24.spicyplayer.playback.remote.RemoteCommandPayload(
+                    action = com.tx24.spicyplayer.playback.remote.RemoteAction.CUSTOM_ACTION,
+                    valueString = action,
+                )
+            ))
+            return
+        }
+        if (isController) {
+            com.tx24.spicyplayer.LyricsActivity.remoteClientHolder?.sendCommand(
+                com.tx24.spicyplayer.playback.remote.RemoteAction.CUSTOM_ACTION,
+                valueString = action,
+            )
+            return
+        }
+        if (cloudSpotifyManager != null && (action == "spotify_shuffle" || action == "spotify_repeat")) {
+            when (action) {
+                "spotify_shuffle" -> cloudSpotifyManager?.toggleShuffle()
+                "spotify_repeat" -> cloudSpotifyManager?.cycleRepeat()
+            }
+            return
+        }
         val active = controller ?: return
         val extras = active.playbackState?.customActions?.firstOrNull { it.action == action }?.extras
         active.transportControls.sendCustomAction(action, extras)
@@ -911,6 +1135,44 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     fun seekTo(targetMs: Long) = seekTo(targetMs, resync = false)
 
     private fun seekTo(targetMs: Long, resync: Boolean) {
+        val server = com.tx24.spicyplayer.LyricsActivity.remoteServerHolder
+        if (isRemoteSessionActive && server != null) {
+            val target = targetMs.coerceIn(
+                0L,
+                mutableState.value.durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE,
+            )
+            server.broadcast(com.tx24.spicyplayer.playback.remote.RemoteMessage(
+                type = com.tx24.spicyplayer.playback.remote.RemoteMessageType.COMMAND,
+                command = com.tx24.spicyplayer.playback.remote.RemoteCommandPayload(
+                    action = com.tx24.spicyplayer.playback.remote.RemoteAction.SEEK,
+                    valueLong = target,
+                )
+            ))
+            clock.seekTo(target, SystemClock.elapsedRealtime())
+            tickerWake.trySend(Unit)
+            return
+        }
+        if (isController) {
+            val target = targetMs.coerceIn(
+                0L,
+                mutableState.value.durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE,
+            )
+            com.tx24.spicyplayer.LyricsActivity.remoteClientHolder?.sendCommand(com.tx24.spicyplayer.playback.remote.RemoteAction.SEEK, valueLong = target)
+            clock.seekTo(target, SystemClock.elapsedRealtime())
+            tickerWake.trySend(Unit)
+            return
+        }
+        if (isCloudSessionActive && cloudSpotifyManager != null) {
+            val target = targetMs.coerceIn(
+                0L,
+                mutableState.value.durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE,
+            )
+            cloudSpotifyManager?.seekTo(target)
+            tickerWake.trySend(Unit)
+            clock.seekTo(target, SystemClock.elapsedRealtime())
+            mutableState.value = mutableState.value.copy(status = null)
+            return
+        }
         val active = controller ?: return
         if (((active.playbackState?.actions ?: 0L) and PlaybackState.ACTION_SEEK_TO) == 0L) {
             mutableState.value = mutableState.value.copy(
@@ -966,6 +1228,12 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
 
     /** Positive delay makes the lyrics appear later; negative delay advances them. */
     fun adjustLyricDelay(deltaMs: Int) {
+        if (isController) {
+            com.tx24.spicyplayer.LyricsActivity.remoteClientHolder?.sendCommand(com.tx24.spicyplayer.playback.remote.RemoteAction.DELAY_DELTA, valueInt = deltaMs)
+            val newDelay = clampDelay(mutableState.value.lyricDelayMs + deltaMs)
+            mutableState.value = mutableState.value.copy(lyricDelayMs = newDelay)
+            return
+        }
         val newDelay = clampDelay(mutableState.value.lyricDelayMs + deltaMs)
         outputProfiles.saveDelayMs(outputRoute, newDelay)
         SyncTrace.add(SystemClock.elapsedRealtime(), "output delay: $newDelay")
@@ -1002,6 +1270,7 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
 
     /** Not held at the song's length like [currentPositionMs]: a line can run to the end or past it. */
     fun currentLyricPositionMs(): Long = mutableState.value.let {
+        if (it.title == "Nothing playing") return 0L
         lyricPositionMs(clock.positionAt(SystemClock.elapsedRealtime()), it.lyricDelayMs, it.songDelayMs, it.playerDelayMs)
     }
 
@@ -1591,6 +1860,298 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
         val identity = metadata.lyricsKey()
         val manual = spotifyIdInput?.spotifyTrackId() ?: manualSpotifyId
         val request = lookupRequest(metadata, manual ?: mutableState.value.detectedSpotifyId)
+        loadLyricsForRequest(identity, request, manual, settle, force)
+    }
+
+    fun resetCloudPlayback() {
+        val wasActive = isCloudSessionActive || cloudSpotifyManager != null
+        isCloudSessionActive = false
+        cloudSpotifyManager = null
+        if (wasActive) {
+            currentTrackIdentity = null
+            currentLyricsKey = null
+            lyricsKeyTaken = false
+            manualSpotifyId = null
+            pendingCommand = null
+            pendingSkip = null
+            lyricsJob?.cancel()
+            extrasJob?.cancel()
+            clock.reset(SystemClock.elapsedRealtime())
+            awaitingTrackReport = false
+        }
+        if (isLocalPlaybackActive()) {
+            hasEverPlayedLocally = true
+            updateFromController(metadataChanged = true)
+        } else {
+            resetToIdleState()
+        }
+    }
+
+    fun updateFromCloud(playback: SpotifyCloudPlayback?) {
+        val localPlaying = controller?.playbackState?.let {
+            it.state == PlaybackState.STATE_PLAYING || it.state in IN_BETWEEN_STATES
+        } == true
+
+        if (localPlaying) {
+            // Local playback is actively playing on this device.
+            // Do not override local audio playback.
+            isCloudSessionActive = false
+            return
+        }
+
+        // If local controller exists and cloud is not currently playing, prefer local controller
+        if (controller != null && playback?.isPlaying != true && !isCloudSessionActive) {
+            return
+        }
+
+        if (playback == null || playback.track == null) {
+            val wasActive = isCloudSessionActive
+            isCloudSessionActive = false
+            if (wasActive) {
+                currentTrackIdentity = null
+                currentLyricsKey = null
+                lyricsKeyTaken = false
+                manualSpotifyId = null
+                pendingCommand = null
+                pendingSkip = null
+                lyricsJob?.cancel()
+                extrasJob?.cancel()
+                clock.reset(SystemClock.elapsedRealtime())
+                awaitingTrackReport = false
+            }
+            if (isLocalPlaybackActive()) {
+                hasEverPlayedLocally = true
+                updateFromController(metadataChanged = true)
+            } else {
+                resetToIdleState()
+            }
+            return
+        }
+
+        isCloudSessionActive = true
+        val track = playback.track ?: return
+        val trackIdentity = if (track.id.isNotBlank()) "cloud:${track.id}" else "cloud:${track.title}:${track.artist}"
+        val trackChanged = trackIdentity != currentTrackIdentity
+        val cleaned = TrackNameCleaner.clean(track.title, track.artist)
+        val lyricsKey = "${cleaned.artist} - ${cleaned.title}"
+        val lyricsChanged = lyricsKey != currentLyricsKey
+
+        if (trackChanged) {
+            currentTrackIdentity = trackIdentity
+            currentLyricsKey = lyricsKey
+            trackChangedAt = SystemClock.elapsedRealtime()
+        }
+
+        // Guard against Spotify API returning 0/negative progress during mid-song buffering or glitches
+        val now = SystemClock.elapsedRealtime()
+        val currentClockPos = clock.positionAt(now)
+        val effectiveProgressMs = if (!trackChanged && playback.isPlaying && playback.progressMs <= 0L && currentClockPos > 3000L) {
+            currentClockPos
+        } else {
+            playback.progressMs
+        }
+
+        val speed = if (playback.isPlaying) 1f else 0f
+        if (trackChanged) {
+            clock.startTrack(now, speed, playback.isPlaying)
+            clock.seekTo(effectiveProgressMs, now)
+        } else {
+            val diff = effectiveProgressMs - currentClockPos
+            val absDiff = kotlin.math.abs(diff)
+            if (absDiff < 1000L) {
+                // 1. 差异小于 1 秒：判定为网络延迟/抖动，不操作位置，仅在播放状态改变时更新状态
+                if (clock.isPlaying != playback.isPlaying) {
+                    clock.updatePlaying(playback.isPlaying, speed, now)
+                }
+            } else if (absDiff <= 3500L) {
+                // 2. 差异在 3 秒左右（1s - 3.5s）：平滑过渡，加速倒放或快进对齐
+                val duration = minOf(1000L, maxOf(600L, (absDiff * 0.4f).toLong()))
+                clock.smoothSeekTo(effectiveProgressMs, now, durationMs = duration)
+                if (clock.isPlaying != playback.isPlaying) {
+                    clock.updatePlaying(playback.isPlaying, speed, now)
+                }
+            } else {
+                // 3. 差异大于 3.5 秒：判定为大幅跳转/seek，直接瞬移同步
+                clock.seekTo(effectiveProgressMs, now)
+                if (clock.isPlaying != playback.isPlaying) {
+                    clock.updatePlaying(playback.isPlaying, speed, now)
+                }
+            }
+        }
+        tickerWake.trySend(Unit)
+
+        val cloudCustomActions = defaultSpotifyCustomActions(playback.shuffleState, playback.repeatState)
+        val cloudQueue = playback.queue?.mapIndexed { index, qTrack ->
+            val trackId = qTrack.id.ifBlank { "${qTrack.title}_${qTrack.artist}_$index" }
+            QueueEntry(
+                id = trackId.hashCode().toLong().let { if (it == 0L) (index + 1).toLong() else it },
+                title = qTrack.title,
+                subtitle = qTrack.artist,
+                icon = null,
+                iconUri = qTrack.artworkUrl,
+                current = index == 0,
+            )
+        } ?: emptyList()
+
+        mutableState.value = mutableState.value.copy(
+            accessGranted = true,
+            sourcePackage = "com.spotify.music.cloud",
+            playerLabel = "Spotify Cloud",
+            title = track.title,
+            artist = track.artist,
+            album = track.album,
+            durationMs = track.durationMs,
+            isPlaying = playback.isPlaying,
+            canSeek = true,
+            detectedSpotifyId = track.id,
+            manualSpotifyId = null,
+            artwork = null,
+            artworkUri = track.artworkUrl,
+            lyrics = if (lyricsChanged) LyricsState.Loading else mutableState.value.lyrics,
+            customActions = cloudCustomActions,
+            queue = if (cloudQueue.isNotEmpty()) cloudQueue else mutableState.value.queue,
+        )
+
+        val lyricsNeedFetch = lyricsChanged || mutableState.value.lyrics is LyricsState.Idle
+        if (lyricsNeedFetch) {
+            val req = LyricsLookupRequest(
+                artist = cleaned.artist,
+                title = cleaned.title,
+                album = track.album,
+                durationSeconds = (track.durationMs / 1000L).toInt(),
+                spotifyTrackId = track.id.ifBlank { null },
+            )
+            loadLyricsForRequest(lyricsKey, req, manual = null, settle = trackChanged)
+        } else if (trackChanged && cloudQueue.isNotEmpty()) {
+            warmAhead()
+        }
+    }
+
+    fun updateFromRemote(remote: com.tx24.spicyplayer.playback.remote.RemoteStatePayload?) {
+        if (remote == null || (remote.title.isBlank() && !remote.isPlaying) || remote.title == "Nothing playing") {
+            isRemoteSessionActive = false
+            if (isLocalPlaybackActive()) {
+                hasEverPlayedLocally = true
+                updateFromController(metadataChanged = true)
+            } else {
+                resetToIdleState()
+            }
+            return
+        }
+        isRemoteSessionActive = true
+
+        val trackIdentity = "remote:${remote.title}:${remote.artist}"
+        val trackChanged = trackIdentity != currentTrackIdentity
+        val cleaned = TrackNameCleaner.clean(remote.title, remote.artist)
+        val lyricsKey = "${cleaned.artist} - ${cleaned.title}"
+        val lyricsChanged = lyricsKey != currentLyricsKey
+
+        if (trackChanged) {
+            currentTrackIdentity = trackIdentity
+            currentLyricsKey = lyricsKey
+            trackChangedAt = SystemClock.elapsedRealtime()
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        val currentClockPos = clock.positionAt(now)
+        val effectivePositionMs = if (!trackChanged && remote.isPlaying && remote.positionMs <= 0L && currentClockPos > 3000L) {
+            currentClockPos
+        } else {
+            remote.positionMs
+        }
+
+        val speed = if (remote.isPlaying) 1f else 0f
+        if (trackChanged) {
+            clock.startTrack(now, speed, remote.isPlaying)
+            clock.seekTo(effectivePositionMs, now)
+        } else {
+            val diff = effectivePositionMs - currentClockPos
+            val absDiff = kotlin.math.abs(diff)
+            if (absDiff < 1000L) {
+                // 差异小于 1 秒：判定为网络延迟，不操作位置
+                if (clock.isPlaying != remote.isPlaying) {
+                    clock.updatePlaying(remote.isPlaying, speed, now)
+                }
+            } else if (absDiff <= 3500L) {
+                // 差异在 3 秒左右：平滑过渡，加速倒放或快进
+                val duration = minOf(1000L, maxOf(600L, (absDiff * 0.4f).toLong()))
+                clock.smoothSeekTo(effectivePositionMs, now, durationMs = duration)
+                if (clock.isPlaying != remote.isPlaying) {
+                    clock.updatePlaying(remote.isPlaying, speed, now)
+                }
+            } else {
+                // 差异大于 3.5 秒：瞬移同步
+                clock.seekTo(effectivePositionMs, now)
+                if (clock.isPlaying != remote.isPlaying) {
+                    clock.updatePlaying(remote.isPlaying, speed, now)
+                }
+            }
+        }
+        tickerWake.trySend(Unit)
+
+        val remoteCustomActions = defaultSpotifyCustomActions(remote.shuffleState, remote.repeatState)
+        val remoteQueue = remote.queue?.map { q ->
+            QueueEntry(
+                id = q.id,
+                title = q.title,
+                subtitle = q.subtitle,
+                icon = null,
+                iconUri = q.artworkUrl,
+                current = q.current,
+            )
+        } ?: emptyList()
+
+        mutableState.value = mutableState.value.copy(
+            accessGranted = true,
+            sourcePackage = "com.tx24.spicyplayer.display",
+            playerLabel = remote.deviceName.ifBlank { "Spicy Display" },
+            title = remote.title,
+            artist = remote.artist,
+            album = remote.album,
+            durationMs = remote.durationMs,
+            isPlaying = remote.isPlaying,
+            canSeek = true,
+            artwork = null,
+            artworkUri = remote.artworkUrl,
+            lyrics = if (lyricsChanged) LyricsState.Loading else mutableState.value.lyrics,
+            customActions = remoteCustomActions,
+            queue = if (remoteQueue.isNotEmpty()) remoteQueue else mutableState.value.queue,
+        )
+
+        val wTemp = remote.weatherTempC
+        val wCond = remote.weatherCondition
+        if (wTemp != null && wCond != null) {
+            mutableWeather.value = CurrentWeather(
+                tempC = wTemp,
+                feelsLikeC = remote.weatherFeelsLikeC ?: wTemp,
+                tempMinC = remote.weatherMinC ?: wTemp,
+                tempMaxC = remote.weatherMaxC ?: wTemp,
+                humidity = remote.weatherHumidity ?: 50,
+                condition = wCond,
+                description = remote.weatherDescription?.ifBlank { wCond } ?: wCond,
+                iconCode = remote.weatherIconCode ?: "",
+                cityName = remote.cityName ?: "",
+            )
+        }
+
+        if (lyricsChanged || (remote.isPlaying && mutableState.value.lyrics is LyricsState.Idle)) {
+            val req = LyricsLookupRequest(
+                artist = cleaned.artist,
+                title = cleaned.title,
+                album = remote.album,
+                durationSeconds = (remote.durationMs / 1000L).toInt(),
+            )
+            loadLyricsForRequest(lyricsKey, req, manual = null, settle = true)
+        }
+    }
+
+    private fun loadLyricsForRequest(
+        identity: String?,
+        request: LyricsLookupRequest,
+        manual: String?,
+        settle: Boolean = false,
+        force: Boolean = false,
+    ) {
         lookedUp = request
         if (request.title.isBlank() || request.artist.isBlank()) {
             mutableState.value = mutableState.value.copy(lyrics = LyricsNotices.missingMetadata)
@@ -1701,20 +2262,36 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     private fun warmAhead() {
         // A lookup that finished after the app was left doesn't start fetching ahead.
         if (!uiStarted.value) return
-        val session = controller ?: return
-        val queue = session.queue.orEmpty()
-        val at = queue.indexOfFirst { it.queueId == session.playbackState?.activeQueueItemId }
-        if (at < 0) return
-        val upcoming = queue.drop(at + 1).take(FETCH_AHEAD).mapNotNull { item ->
-            val d = item.description
-            val names = TrackNameCleaner.clean(d.title?.toString().orEmpty(), d.subtitle?.toString().orEmpty())
-            if (names.title.isBlank() || names.artist.isBlank()) return@mapNotNull null
-            LyricsLookupRequest(
-                artist = names.artist,
-                title = names.title,
-                album = "",
-                durationSeconds = ((d.extras?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L) / 1_000L).toInt(),
-            )
+        val session = controller
+        val upcoming = if (session != null) {
+            val queue = session.queue.orEmpty()
+            val at = queue.indexOfFirst { it.queueId == session.playbackState?.activeQueueItemId }
+            if (at < 0) return
+            queue.drop(at + 1).take(FETCH_AHEAD).mapNotNull { item ->
+                val d = item.description
+                val names = TrackNameCleaner.clean(d.title?.toString().orEmpty(), d.subtitle?.toString().orEmpty())
+                if (names.title.isBlank() || names.artist.isBlank()) return@mapNotNull null
+                LyricsLookupRequest(
+                    artist = names.artist,
+                    title = names.title,
+                    album = "",
+                    durationSeconds = ((d.extras?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L) / 1_000L).toInt(),
+                )
+            }
+        } else {
+            val queue = mutableState.value.queue
+            val at = queue.indexOfFirst { it.current }
+            if (at < 0) return
+            queue.drop(at + 1).take(FETCH_AHEAD).mapNotNull { item ->
+                val names = TrackNameCleaner.clean(item.title, item.subtitle)
+                if (names.title.isBlank() || names.artist.isBlank()) return@mapNotNull null
+                LyricsLookupRequest(
+                    artist = names.artist,
+                    title = names.title,
+                    album = "",
+                    durationSeconds = 0,
+                )
+            }
         }
         val backend = lyricsBackend
         warmJob = viewModelScope.launch(Dispatchers.IO) {
@@ -1886,6 +2463,7 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     }
 
     private fun attachBestSession(sessions: List<MediaController>) {
+        if (isController || isRemoteSessionActive) return
         val activeTokens = sessions.map { it.sessionToken }.toSet()
         (observedSessions.keys - activeTokens).forEach { token ->
             observedSessions.remove(token)?.let { old ->
@@ -1924,6 +2502,7 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     }
 
     private fun refreshSessionSelection() {
+        if (isController || isRemoteSessionActive) return
         runCatching { sessionManager.getActiveSessions(listenerComponent) }
             .onSuccess(::attachBestSession)
     }
@@ -1932,24 +2511,28 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
         clearTranslation()
         controller?.unregisterCallback(controllerCallback)
         controller = null
-        currentTrackIdentity = null
-        currentLyricsKey = null
-        // A player that says nothing about its song has the same key (none): without this, the
-        // last player's song would stay up under it.
-        lyricsKeyTaken = false
-        manualSpotifyId = null
-        // Commands sent to the last player are no answer to wait for from this one.
-        pendingCommand = null
-        pendingSkip = null
-        lyricsJob?.cancel()
-        extrasJob?.cancel()
-        clock.reset(SystemClock.elapsedRealtime())
-        awaitingTrackReport = false
+        if (!isCloudSessionActive && !isController) {
+            currentTrackIdentity = null
+            currentLyricsKey = null
+            // A player that says nothing about its song has the same key (none): without this, the
+            // last player's song would stay up under it.
+            lyricsKeyTaken = false
+            manualSpotifyId = null
+            // Commands sent to the last player are no answer to wait for from this one.
+            pendingCommand = null
+            pendingSkip = null
+            lyricsJob?.cancel()
+            extrasJob?.cancel()
+            clock.reset(SystemClock.elapsedRealtime())
+            awaitingTrackReport = false
+        }
     }
 
     private fun updateFromController(metadataChanged: Boolean = false, preserveStatus: Boolean = false) {
+        if (isController || isRemoteSessionActive) return
         val active = controller
         if (active == null) {
+            if (isCloudSessionActive) return
             // Song state goes; settings the screens show (sources, keys, the Lyrics Manager) stay.
             val kept = mutableState.value
             mutableState.value = PlayerUiState(
@@ -1981,6 +2564,21 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
         }
         val metadata = active.metadata
         val playback = active.playbackState
+        val isLocalPlaying = playback?.state == PlaybackState.STATE_PLAYING || playback?.state in IN_BETWEEN_STATES
+        if (isCloudSessionActive && !isLocalPlaying) {
+            // Cloud session is currently actively playing!
+            // An idle or paused local controller must not stomp over active cloud playback.
+            return
+        }
+        if (isLocalPlaying) {
+            hasEverPlayedLocally = true
+            isCloudSessionActive = false
+        } else if (!hasEverPlayedLocally && !isCloudSessionActive && !isRemoteSessionActive) {
+            // Local playback has never been active during this session, and is paused/idle now.
+            // Do not show an old dormant session from Android's notification bar.
+            resetToIdleState()
+            return
+        }
         val trackIdentity = metadata.trackIdentity()
         val trackChanged = trackIdentity != currentTrackIdentity
         val refreshArtwork = metadataChanged || trackChanged
@@ -2038,7 +2636,11 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
         val isPlaying = if (inBetween || loadingPause) previous.isPlaying else playback?.state == PlaybackState.STATE_PLAYING
         val customActions = playback?.customActions.orEmpty().map { custom ->
             SessionCustomAction(custom.action, custom.name.toString(), actionIcon(active.packageName, custom.icon))
-        }.ifEmpty { if (inBetween) previous.customActions else emptyList() }
+        }.ifEmpty {
+            if (inBetween) previous.customActions
+            else if (cloudSpotifyManager != null || active.packageName.contains("spotify", ignoreCase = true)) defaultSpotifyCustomActions()
+            else emptyList()
+        }
         val lyricsKey = metadata.lyricsKey()
         val lyricsChanged = !lyricsKeyTaken || lyricsKey != currentLyricsKey
         val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
@@ -2366,6 +2968,11 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
                 lastPeriodicCheckMs = 0L
             }
             val now = SystemClock.elapsedRealtime()
+            if (isCloudSessionActive && mutableState.value.isPlaying && mutableState.value.durationMs > 0L) {
+                if (currentPositionMs() >= mutableState.value.durationMs) {
+                    cloudSpotifyManager?.triggerImmediatePoll()
+                }
+            }
             if (now - lastPeriodicCheckMs >= PERIODIC_CHECK_MS) {
                 lastPeriodicCheckMs = now
                 refreshOutputRoute()
@@ -2468,6 +3075,9 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
     }
 
     fun currentPositionMs(): Long {
+        if (!mutableState.value.isPlaying || mutableState.value.title == "Nothing playing") {
+            return if (mutableState.value.title == "Nothing playing") 0L else clock.positionAt(SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        }
         val position = clock.positionAt(SystemClock.elapsedRealtime())
         return mutableState.value.durationMs.takeIf { it > 0L }?.let(position::coerceAtMost) ?: position
     }

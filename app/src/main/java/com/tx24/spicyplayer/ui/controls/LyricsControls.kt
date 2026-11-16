@@ -1,5 +1,9 @@
 package com.tx24.spicyplayer.ui.controls
 
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.ui.zIndex
 import kotlin.math.abs
 import com.tx24.spicyplayer.ui.components.scrollHints
@@ -227,6 +231,8 @@ fun LyricsControls(
     onOpenQuickSettings: (() -> Unit)? = null,
     /** Shows the picture-in-picture button when set. */
     onEnterPip: (() -> Unit)? = null,
+    onToggleAmbient: (() -> Unit)? = null,
+    onOpenRemote: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     expanded: Boolean = false,
     onToggleExpanded: () -> Unit = {},
@@ -286,9 +292,9 @@ fun LyricsControls(
             contentAlignment = Alignment.TopCenter,
         ) {
             if (wide) {
-                ControlsBar(controls, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, shown, showResync, showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip)
+                ControlsBar(controls, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, shown, showResync, showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip, onToggleAmbient = onToggleAmbient, onOpenRemote = onOpenRemote)
             } else {
-                ControlsColumn(controls, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, shown, showResync, showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip)
+                ControlsColumn(controls, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, shown, showResync, showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip, onToggleAmbient = onToggleAmbient, onOpenRemote = onOpenRemote)
             }
             // Hidden controls swallow touches too: a touch there only brings them back, rather
             // than pressing a button nobody can see.
@@ -328,6 +334,8 @@ private fun ControlsColumn(
     onOpenQueue: (() -> Unit)? = null,
     onOpenSource: (() -> Unit)? = null,
     onEnterPip: (() -> Unit)? = null,
+    onToggleAmbient: (() -> Unit)? = null,
+    onOpenRemote: (() -> Unit)? = null,
 ) {
     val shuffle = controls.customActions.firstOrNull { it.kind == ActionKind.Shuffle }
     val repeat = controls.customActions.firstOrNull { it.kind == ActionKind.Repeat }
@@ -349,7 +357,7 @@ private fun ControlsColumn(
         // A player that adds enough buttons to run off the screen gets the rest in a More menu.
         BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = SpicySpacing.S2), contentAlignment = Alignment.Center) {
             FloatingButtons(
-                floatingActions(controls, others, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, onSwapSide = null, showResync = showResync, showExpand = showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip),
+                floatingActions(controls, others, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, onSwapSide = null, showResync = showResync, showExpand = showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip, onToggleAmbient = onToggleAmbient, onOpenRemote = onOpenRemote),
                 maxWidth, minSize = FLOATING_SIZE, maxSize = FLOATING_SIZE, minGap = SpicySpacing.S2, maxGap = SpicySpacing.S4,
             )
         }
@@ -378,6 +386,8 @@ private fun ControlsBar(
     onOpenQueue: (() -> Unit)? = null,
     onOpenSource: (() -> Unit)? = null,
     onEnterPip: (() -> Unit)? = null,
+    onToggleAmbient: (() -> Unit)? = null,
+    onOpenRemote: (() -> Unit)? = null,
 ) {
     val shuffle = controls.customActions.firstOrNull { it.kind == ActionKind.Shuffle }
     val repeat = controls.customActions.firstOrNull { it.kind == ActionKind.Repeat }
@@ -395,7 +405,7 @@ private fun ControlsBar(
         }
         BoxWithConstraints(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
             FloatingButtons(
-                floatingActions(controls, others, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, onSwapSide = null, showResync = showResync, showExpand = showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip),
+                floatingActions(controls, others, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, onSwapSide = null, showResync = showResync, showExpand = showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip, onToggleAmbient = onToggleAmbient, onOpenRemote = onOpenRemote),
                 maxWidth - SpicySpacing.S4, minSize = COVER_BUTTON_MIN, maxSize = COVER_BUTTON_MAX, minGap = COVER_BUTTON_GAP, maxGap = COVER_BUTTON_GAP,
             )
         }
@@ -563,6 +573,8 @@ private fun floatingActions(
     onOpenQueue: (() -> Unit)? = null,
     onOpenSource: (() -> Unit)? = null,
     onEnterPip: (() -> Unit)? = null,
+    onToggleAmbient: (() -> Unit)? = null,
+    onOpenRemote: (() -> Unit)? = null,
 ): List<FloatingAction> = buildList {
     if (romanizeAvailable) {
         // Shows what a tap switches to: "A" to go back, the kana mark to romanize.
@@ -578,7 +590,7 @@ private fun floatingActions(
     // In groups: the lyric text (romanize, translate), the view, the app's tools, the player's own
     // buttons, then settings.
     controls.onTranslate?.let { toggle ->
-        add(FloatingAction(if (controls.translated) "Turn translation off" else "Translate", keep = 78, toggle, toggled = controls.translated) { icon ->
+        add(FloatingAction(if (controls.translated) "Turn translation off" else "Translate", keep = 95, toggle, toggled = controls.translated) { icon ->
             if (controls.translating) {
                 // A spinning ring in the glyph's place until the translation lands.
                 val turn by rememberInfiniteTransition(label = "translating").animateFloat(
@@ -617,6 +629,12 @@ private fun floatingActions(
     }
     if (onEnterPip != null) add(FloatingAction("Picture-in-picture", keep = 20, onEnterPip) { icon ->
         PictureInPictureGlyph(Modifier.size(icon(23f)))
+    })
+    if (onToggleAmbient != null) add(FloatingAction("Standby clock & weather", keep = 18, onToggleAmbient) { icon ->
+        Icon(Icons.Rounded.Schedule, "Standby clock", Modifier.size(icon(23f)), tint = SpicyColors.TextPrimary)
+    })
+    if (onOpenRemote != null) add(FloatingAction("Remote control", keep = 15, onOpenRemote) { icon ->
+        Icon(Icons.Rounded.Devices, "Remote control", Modifier.size(icon(23f)), tint = SpicyColors.TextPrimary)
     })
     if (onOpenQuickSettings != null) add(FloatingAction("Quick settings", keep = 90, onOpenQuickSettings) { icon ->
         QuickSettingsGlyph(Modifier.size(icon(23f)))
@@ -659,6 +677,8 @@ fun CoverControls(
     showResync: Boolean = true,
     showExpand: Boolean = true,
     timeline: Boolean = true,
+    onToggleAmbient: (() -> Unit)? = null,
+    onOpenRemote: (() -> Unit)? = null,
 ) {
     val shuffle = controls.customActions.firstOrNull { it.kind == ActionKind.Shuffle }
     val repeat = controls.customActions.firstOrNull { it.kind == ActionKind.Repeat }
@@ -683,7 +703,7 @@ fun CoverControls(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             FloatingButtons(
-                floatingActions(controls, others, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, onSwapSide, coverOnRight, showResync, showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip),
+                floatingActions(controls, others, romanizeAvailable, romanized, onToggleRomanize, onOpenSettings, onOpenLyricsManager, onOpenQuickSettings, expanded, onToggleExpanded, onSwapSide, coverOnRight, showResync, showExpand, onOpenQueue = onOpenQueue, onOpenSource = onOpenSource, onEnterPip = onEnterPip, onToggleAmbient = onToggleAmbient, onOpenRemote = onOpenRemote),
                 side * 0.88f, minSize = COVER_BUTTON_MIN, maxSize = COVER_BUTTON_MAX, minGap = COVER_BUTTON_GAP, maxGap = SpicySpacing.S3,
             )
             if (timeline) {
@@ -911,8 +931,8 @@ internal val SessionCustomAction.kind: ActionKind
     get() {
         val text = "$name $action".lowercase()
         return when {
-            "shuffle" in text -> ActionKind.Shuffle
-            "repeat" in text || "loop" in text -> ActionKind.Repeat
+            "shuffle" in text || "随机" in text -> ActionKind.Shuffle
+            "repeat" in text || "loop" in text || "循环" in text -> ActionKind.Repeat
             else -> ActionKind.Other
         }
     }
@@ -945,15 +965,18 @@ private fun PlaybackRow(
     /** With neither shuffle nor repeat from the player, leave out their empty slots. */
     dropEmptySides: Boolean = false,
 ) {
-    val sides = !dropEmptySides || shuffle?.icon != null || repeat?.icon != null
+    val hasShuffle = shuffle != null && (shuffle.icon != null || shuffle.vectorIcon != null)
+    val hasRepeat = repeat != null && (repeat.icon != null || repeat.vectorIcon != null)
+    val sides = !dropEmptySides || (hasShuffle || hasRepeat)
     val playWidth = skipWidth * (9.25f / 12f)
     val sideWidth = skipWidth * (7f / 12f)
+    val rowHeight = maxOf(TOUCH_SIZE, playWidth / (15f / 20f) + 8.dp)
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val slot = if (fillSlots) Modifier.weight(1f).height(TOUCH_SIZE) else null
+        val slot = if (fillSlots) Modifier.weight(1f).height(rowHeight) else null
         if (sides) SideAction(shuffle, controls, sideWidth, slot)
         val animate = LocalUiAnimations.current
         val scope = rememberCoroutineScope()
@@ -1000,7 +1023,9 @@ private fun PlaybackRow(
  * room the player leaves when it sends only one of them (17%), or neither (21%).
  */
 private fun coverSkipWidth(side: Dp, shuffle: SessionCustomAction?, repeat: SessionCustomAction?): Dp {
-    val sideActions = listOfNotNull(shuffle?.icon, repeat?.icon).size
+    val hasShuffle = shuffle != null && (shuffle.icon != null || shuffle.vectorIcon != null)
+    val hasRepeat = repeat != null && (repeat.icon != null || repeat.vectorIcon != null)
+    val sideActions = (if (hasShuffle) 1 else 0) + (if (hasRepeat) 1 else 0)
     return side * when (sideActions) {
         2 -> 0.15f
         1 -> 0.17f
@@ -1016,18 +1041,46 @@ private const val MORPH_MS = 260
 
 @Composable
 private fun SideAction(action: SessionCustomAction?, controls: PlaybackControlsState, width: Dp, slot: Modifier?) {
-    val bitmap = action?.icon
-    if (bitmap == null) {
+    if (action == null) {
         Spacer(slot ?: Modifier.size(TOUCH_SIZE))
         return
     }
-    val painter = remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
-    PressableGlyph(
-        painter, width, 1f, action.name,
-        colorFilter = ColorFilter.tint(SpicyColors.TextPrimary),
-        touch = slot,
-        onClick = { controls.onCustomAction(action.action) },
-    )
+    val isSpotifyApi = action.action == "spotify_shuffle" || action.action == "spotify_repeat" || action.vectorIcon != null
+    if (isSpotifyApi) {
+        val vector = action.vectorIcon ?: when (action.kind) {
+            ActionKind.Shuffle -> SpotifyIcons.Shuffle
+            ActionKind.Repeat -> if (action.name.contains("one", ignoreCase = true) || action.name.contains("单曲", ignoreCase = true)) SpotifyIcons.RepeatOne else SpotifyIcons.Repeat
+            else -> SpotifyIcons.Shuffle
+        }
+        val painter = rememberVectorPainter(vector)
+        PressableGlyph(
+            painter = painter,
+            width = width,
+            aspect = vector.aspect,
+            description = action.name,
+            colorFilter = ColorFilter.tint(if (action.isActive) Color.White else Color.White.copy(alpha = 0.6f)),
+            hasDot = action.isActive,
+            touch = slot,
+            onClick = { controls.onCustomAction(action.action) },
+        )
+    } else {
+        val bitmap = action.icon
+        if (bitmap != null) {
+            val painter = remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
+            PressableGlyph(
+                painter = painter,
+                width = width,
+                aspect = 1f,
+                description = action.name,
+                colorFilter = ColorFilter.tint(SpicyColors.TextPrimary),
+                hasDot = false,
+                touch = slot,
+                onClick = { controls.onCustomAction(action.action) },
+            )
+        } else {
+            Spacer(slot ?: Modifier.size(TOUCH_SIZE))
+        }
+    }
 }
 
 private val ImageVector.aspect get() = viewportWidth / viewportHeight
@@ -1050,6 +1103,7 @@ private fun PressableGlyph(
     description: String,
     rotate: Boolean = false,
     colorFilter: ColorFilter? = null,
+    hasDot: Boolean = false,
     /** The touch area; null: at least 48dp square around the glyph. */
     touch: Modifier? = null,
     onClick: () -> Unit,
@@ -1060,8 +1114,9 @@ private fun PressableGlyph(
     // the press before it lifts.
     val currentOnClick by rememberUpdatedState(onClick)
     val haptics by rememberUpdatedState(LocalHapticFeedback.current)
+    val iconHeight = width / aspect
     Box(
-        modifier = (touch ?: Modifier.size(width = maxOf(TOUCH_SIZE, width + 12.dp), height = TOUCH_SIZE))
+        modifier = (touch ?: Modifier.size(width = maxOf(TOUCH_SIZE, width + 12.dp), height = maxOf(TOUCH_SIZE, iconHeight + 8.dp)))
             .keyClickable(CircleShape) { currentOnClick() }
             .semantics {
                 role = Role.Button
@@ -1096,6 +1151,15 @@ private fun PressableGlyph(
                     rotationZ = if (rotate) 180f else 0f
                 },
         )
+        if (hasDot) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 4.dp)
+                    .size(4.dp)
+                    .background(Color.White, CircleShape)
+            )
+        }
     }
 }
 
