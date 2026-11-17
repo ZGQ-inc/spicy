@@ -28,16 +28,20 @@
 # Kuromoji finds its dictionary next to its own classes, so their package names must stay.
 -keep class com.atilika.kuromoji.** { *; }
 
-# Google ML Kit GenAI Prompt API / AICore IPC bindings
--keep class com.google.mlkit.genai.** { *; }
--keep interface com.google.mlkit.genai.** { *; }
--keep enum com.google.mlkit.genai.** { *; }
--keep class com.google.android.gms.internal.mlkit_genai_prompt.** { *; }
--keep interface com.google.android.gms.internal.mlkit_genai_prompt.** { *; }
--keep class com.google.android.gms.internal.mlkit_genai_common.** { *; }
--keep interface com.google.android.gms.internal.mlkit_genai_common.** { *; }
--keep class com.google.android.gms.internal.mlkit_genai_schema.** { *; }
--keep interface com.google.android.gms.internal.mlkit_genai_schema.** { *; }
+# Google ML Kit (GenAI Prompt API, Common, AICore IPC bindings & Firebase Components)
+-keep class com.google.mlkit.** { *; }
+-keep interface com.google.mlkit.** { *; }
+-keep enum com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_** { *; }
+-keep interface com.google.android.gms.internal.mlkit_** { *; }
+-keep class com.google.firebase.components.** { *; }
+-keep interface com.google.firebase.components.** { *; }
+-keep public class * implements com.google.firebase.components.ComponentRegistrar {
+    public <init>();
+    public java.util.List getComponents();
+}
+-keep class com.google.android.gms.tasks.** { *; }
+-keep interface com.google.android.gms.tasks.** { *; }
 -keep enum com.tx24.spicyplayer.translation.OnDeviceModel$Status { *; }
 
 # Crash traces stay readable with the mapping file.
