@@ -1,6 +1,7 @@
 package com.tx24.spicyplayer.translation
 
 import android.os.Build
+import android.util.Log
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -21,8 +22,8 @@ internal object AiPrompt {
     fun system(target: String): String {
         val language = "${TranslationLanguages.name(target)} ($target)"
         return "You translate song lyrics into $language. You are given the song's lines as a JSON array of strings. " +
-            "Translate each line on its own so it stays lined up with its original, keeping its meaning, tone and imagery " +
-            "natural in $language. Don't add, merge, split, explain or censor lines. A line that is already in $language, " +
+            "Translate each line directly and preserve its original artistic tone, meaning and imagery in $language. " +
+            "Do not omit, combine, or add explanations. A line that is already in $language, " +
             "or has nothing to translate, is null. Reply with only a JSON object, no code fence: " +
             "{\"language\": \"<ISO 639-1 code of the song's main language>\", \"lines\": [<one string or null per line, in order>]}. " +
             "\"lines\" has exactly as many items as the array you were given."
@@ -207,12 +208,48 @@ class GeminiNanoTranslator : Translator {
         if (OnDeviceModel.status() != OnDeviceModel.Status.Ready) {
             throw TranslationFailure("Gemini Nano isn't ready on this phone. Check it in Translation settings.")
         }
-        val reply = try {
-            OnDeviceModel.generate(AiPrompt.system(request.target), AiPrompt.user(request, withContext = false))
+        return try {
+            translateBatch(request)
         } catch (error: com.google.mlkit.genai.common.GenAiException) {
-            throw TranslationFailure("Gemini Nano couldn't translate these lyrics (${error.errorCode}).")
+            if (error.errorCode == 4 && request.lines.size > 1) {
+                // If a batch tripped the safety policy, try translating line-by-line so that
+                // one sensitive line doesn't block the entire verse.
+                Log.w("GeminiNano", "Batch policy violation (4), falling back to individual lines")
+                translateLinesIndividually(request)
+            } else if (error.errorCode == 4) {
+                // Single line or all lines triggered policy violation: throw IOException
+                // so TranslationEngine can engage fallback (e.g. Google) or handle gracefully.
+                throw IOException("Gemini Nano blocked these lyrics due to safety policy (code 4): ${error.message ?: "content filter triggered"}", error)
+            } else {
+                throw TranslationFailure("Gemini Nano couldn't translate these lyrics (${error.errorCode}).")
+            }
         }
+    }
+
+    private suspend fun translateBatch(request: TranslatorRequest): TranslatorResponse {
+        val reply = OnDeviceModel.generate(AiPrompt.system(request.target), AiPrompt.user(request, withContext = false))
         return AiPrompt.parse(reply)
+    }
+
+    private suspend fun translateLinesIndividually(request: TranslatorRequest): TranslatorResponse {
+        val entries = mutableListOf<TranslationEntry?>()
+        var detectedLang: String? = null
+        for (line in request.lines) {
+            val singleRequest = TranslatorRequest(listOf(line), request.target, request.source, "")
+            val entry = try {
+                val res = translateBatch(singleRequest)
+                if (detectedLang == null) detectedLang = res.detectedLanguage
+                res.lines.firstOrNull()
+            } catch (error: Exception) {
+                Log.w("GeminiNano", "Single line blocked by safety policy or failed: $line", error)
+                null
+            }
+            entries.add(entry)
+        }
+        if (entries.all { it?.text == null }) {
+            throw IOException("Gemini Nano blocked all lines in this batch due to safety policy (code 4).")
+        }
+        return TranslatorResponse(entries, detectedLang)
     }
 }
 
@@ -234,7 +271,7 @@ object OnDeviceModel {
                 else -> Status.Unavailable
             }
         } catch (error: Exception) {
-            // No AICore, a locked-down or unlocked-bootloader phone, or AICore still setting up.
+            Log.w("OnDeviceModel", "Failed to check status", error)
             Status.Unavailable
         }
     }
@@ -253,6 +290,7 @@ object OnDeviceModel {
                 }
             }
         } catch (error: Exception) {
+            Log.w("OnDeviceModel", "Failed to download model", error)
             return false
         }
         return done
