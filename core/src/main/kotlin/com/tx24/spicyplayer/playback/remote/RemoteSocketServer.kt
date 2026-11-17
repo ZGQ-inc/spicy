@@ -221,7 +221,7 @@ class RemoteSocketServer(
                             break
                         }
                         val msg = RemoteMessage.fromJson(line)
-                        if (msg != null) {
+                        if (msg != null && msg.type != null) {
                             if (msg.type == RemoteMessageType.REQUEST_STATE || msg.type == RemoteMessageType.PING) {
                                 if (msg.type == RemoteMessageType.PING) {
                                     sendToClient(socket, RemoteMessage(type = RemoteMessageType.PONG))

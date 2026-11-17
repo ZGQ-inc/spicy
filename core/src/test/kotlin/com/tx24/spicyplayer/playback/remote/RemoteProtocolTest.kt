@@ -78,4 +78,19 @@ class RemoteProtocolTest {
         assertEquals("Beijing", restored.config?.owmCity)
         assertEquals("test_refresh_token", restored.config?.spotifyRefreshToken)
     }
+
+    @Test
+    fun testMalformedOrUnknownMessageHandling() {
+        // Unknown type or missing fields should deserialize safely without throwing
+        val json = """{"type":"UNKNOWN_FUTURE_TYPE","timestamp":123456}"""
+        val restored = RemoteMessage.fromJson(json)
+        assertNotNull(restored)
+        org.junit.Assert.assertNull(restored!!.type)
+        assertEquals(123456L, restored.timestamp)
+
+        // Invalid JSON returns null
+        val invalidJson = """not valid json"""
+        val failed = RemoteMessage.fromJson(invalidJson)
+        org.junit.Assert.assertNull(failed)
+    }
 }

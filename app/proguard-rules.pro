@@ -47,3 +47,10 @@
 # Crash traces stay readable with the mapping file.
 -keepattributes SourceFile, LineNumberTable
 -renamesourcefileattribute SourceFile
+
+
+# Remote protocol and LAN sync payloads serialized via Gson
+-keep class com.tx24.spicyplayer.playback.remote.** { *; }
+-keepclassmembers class com.tx24.spicyplayer.playback.remote.** { <fields>; <init>(...); }
+-keep enum com.tx24.spicyplayer.playback.remote.** { *; }
+-keepclassmembers enum com.tx24.spicyplayer.playback.remote.** { *; }

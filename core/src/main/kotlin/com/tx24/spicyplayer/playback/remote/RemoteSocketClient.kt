@@ -103,7 +103,7 @@ class RemoteSocketClient(
                     lastReceivedMs = System.currentTimeMillis()
                     if (line.isNotBlank()) {
                         val msg = RemoteMessage.fromJson(line)
-                        if (msg != null) {
+                        if (msg != null && msg.type != null) {
                             if (msg.type == RemoteMessageType.STATE_SYNC && msg.state != null) {
                                 mutableState.value = msg.state
                             }

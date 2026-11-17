@@ -986,8 +986,9 @@ private fun LyricsApp(
                         }
                     }
                 }
-                onMessageReceived = { msg ->
-                    when (msg.type) {
+                onMessageReceived = onMessageReceived@ { msg ->
+                    val type = msg.type ?: return@onMessageReceived
+                    when (type) {
                         RemoteMessageType.REQUEST_STATE -> {
                             if (!settings.remotePlaybackRedirectEnabled) {
                                 broadcast(RemoteMessage(type = RemoteMessageType.STATE_SYNC, state = buildStatePayload()))
@@ -1015,7 +1016,8 @@ private fun LyricsApp(
                         }
                         RemoteMessageType.COMMAND -> {
                             msg.command?.let { cmd ->
-                                when (cmd.action) {
+                                val action = cmd.action ?: return@let
+                                when (action) {
                                     RemoteAction.PLAY_PAUSE -> {
                                         viewModel.playPause()
                                         coroutineScope.launch {
@@ -1330,7 +1332,8 @@ private fun LyricsApp(
     LaunchedEffect(remoteClient, isSender) {
         if (isSender) {
             remoteClient.messages.collect { msg ->
-                when (msg.type) {
+                val type = msg.type ?: return@collect
+                when (type) {
                     RemoteMessageType.STATE_SYNC -> {
                         if (!settings.remotePlaybackRedirectEnabled) {
                             msg.state?.let { s ->
@@ -1404,7 +1407,8 @@ private fun LyricsApp(
                     }
                     RemoteMessageType.COMMAND -> {
                         msg.command?.let { cmd ->
-                            when (cmd.action) {
+                            val action = cmd.action ?: return@let
+                            when (action) {
                                 RemoteAction.PLAY_PAUSE -> viewModel.playPause()
                                 RemoteAction.PLAY -> if (!viewModel.state.value.isPlaying) viewModel.playPause()
                                 RemoteAction.PAUSE -> if (viewModel.state.value.isPlaying) viewModel.playPause()

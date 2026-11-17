@@ -113,15 +113,16 @@ class SpotifyCloudManager(
                         consecutiveNoPlayback = 0
                         val current = result.playback
                         val currentTrack = current.track
-                        val trackChanged = currentTrack?.id != lastQueueTrackId
+                        val trackChanged = currentTrack?.id != null && currentTrack.id != lastQueueTrackId
                         val now = android.os.SystemClock.elapsedRealtime()
-                        if (trackChanged || cachedQueue.isEmpty() || (now - lastQueueFetchAt > 20_000L)) {
+                        val shouldFetchQueue = (trackChanged || now - lastQueueFetchAt > 45_000L) && (now - lastQueueFetchAt > 15_000L)
+                        if (shouldFetchQueue) {
+                            lastQueueFetchAt = now
+                            lastQueueTrackId = currentTrack?.id
                             val q = client.fetchQueue(token)
-                            if (q != null && q.isNotEmpty()) {
+                            if (q != null) {
                                 cachedQueue.clear()
                                 cachedQueue.addAll(q)
-                                lastQueueTrackId = currentTrack?.id
-                                lastQueueFetchAt = now
                             }
                         }
                         val currentWithQueue = current.copy(queue = cachedQueue.toList())
@@ -138,7 +139,7 @@ class SpotifyCloudManager(
 
                         val remainingMs = (current.track?.durationMs ?: 0L) - current.progressMs
                         val pollDelay = if (current.isPlaying) {
-                            if (remainingMs in 0L..syncIntervalMs) minOf(1500L, syncIntervalMs) else syncIntervalMs
+                            if (remainingMs in 0L..syncIntervalMs) minOf(3000L, syncIntervalMs) else syncIntervalMs
                         } else (syncIntervalMs * 2).coerceAtLeast(8000L)
                         delay(pollDelay)
                     }
