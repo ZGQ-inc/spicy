@@ -2109,7 +2109,13 @@ private fun LyricsApp(
                 val onOpenLyricsManager = if (settings.lyricsManagerButton) ({ whenUnlocked { showLyricsManager = true } }) else null
                 val onOpenQuickSettings = if (settings.quickSettingsButton) ({ whenUnlocked { quickStart = QuickScreen.Main; showQuickSettings = true } }) else null
                 // The queue's own button opens quick settings on its queue screen.
-                val onOpenQueue = if (settings.queueButton && state.queue.isNotEmpty()) ({ whenUnlocked { quickStart = QuickScreen.Queue; showQuickSettings = true } }) else null
+                val onOpenQueue = if (settings.queueButton && state.queue.isNotEmpty()) ({
+                    whenUnlocked {
+                        viewModel.cloudSpotifyManager?.refreshQueueNow()
+                        quickStart = QuickScreen.Queue
+                        showQuickSettings = true
+                    }
+                }) else null
                 // So does the source's, on its list of sources, while there's a song to choose for.
                 val onOpenSource = if (settings.sourceButton && state.localLyricsKey != null) ({ whenUnlocked { quickStart = QuickScreen.Source; showQuickSettings = true } }) else null
                 val romanizeButton = romanizationAvailable && settings.romanizeButton

@@ -8,12 +8,14 @@ import com.tx24.spicyplayer.ui.settings.AppSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class SpotifyCloudStatus {
     DISABLED,
@@ -26,6 +28,9 @@ enum class SpotifyCloudStatus {
 
 /**
  * Manages background synchronization with Spotify Web API for cloud playback tracking.
+ * Optimized for single-device operation: uses local continuous interpolation, refreshes 2s
+ * after local track completion, polls queue every 30s when idle or instantly on user request,
+ * and eliminates redundant API polling to prevent HTTP 429 rate limits.
  */
 class SpotifyCloudManager(
     private val settings: AppSettings,
@@ -53,6 +58,12 @@ class SpotifyCloudManager(
     private var lastQueueTrackId: String? = null
     private var lastQueueFetchAt = 0L
 
+    private val pollWake = Channel<Unit>(Channel.CONFLATED)
+
+    fun wakeUp() {
+        pollWake.trySend(Unit)
+    }
+
     /**
      * Starts or restarts polling based on settings.
      */
@@ -71,7 +82,6 @@ class SpotifyCloudManager(
 
         pollJob = scope.launch(Dispatchers.IO) {
             var consecutiveNetworkErrors = 0
-            var consecutiveNoPlayback = 0
             while (isActive) {
                 if (!settings.spotifyCloudSyncEnabled) {
                     status.value = SpotifyCloudStatus.DISABLED
@@ -105,17 +115,16 @@ class SpotifyCloudManager(
                     }
                 }
 
-                val syncIntervalMs = (settings.spotifySyncIntervalSeconds.coerceIn(1, 60)) * 1000L
-
                 when (result) {
                     is CurrentlyPlayingResult.Success -> {
                         consecutiveNetworkErrors = 0
-                        consecutiveNoPlayback = 0
                         val current = result.playback
                         val currentTrack = current.track
                         val trackChanged = currentTrack?.id != null && currentTrack.id != lastQueueTrackId
                         val now = android.os.SystemClock.elapsedRealtime()
-                        val shouldFetchQueue = (trackChanged || now - lastQueueFetchAt > 45_000L) && (now - lastQueueFetchAt > 15_000L)
+
+                        // Queue optimization: only poll queue if track changed or idle >= 30s
+                        val shouldFetchQueue = (trackChanged || now - lastQueueFetchAt >= 30_000L) && (now - lastQueueFetchAt >= 15_000L)
                         if (shouldFetchQueue) {
                             lastQueueFetchAt = now
                             lastQueueTrackId = currentTrack?.id
@@ -125,6 +134,7 @@ class SpotifyCloudManager(
                                 cachedQueue.addAll(q)
                             }
                         }
+
                         val currentWithQueue = current.copy(queue = cachedQueue.toList())
                         mutablePlayback.value = currentWithQueue
                         withContext(Dispatchers.Main) {
@@ -137,11 +147,24 @@ class SpotifyCloudManager(
                         lastSyncTimeMs.value = System.currentTimeMillis()
                         lastError.value = null
 
-                        val remainingMs = (current.track?.durationMs ?: 0L) - current.progressMs
+                        // Local interpolation timing:
+                        // When playing: wait until local song finishes + 2s grace period.
+                        // When paused: wait 30s.
+                        val durationMs = current.track?.durationMs ?: 0L
+                        val remainingMs = durationMs - current.progressMs
                         val pollDelay = if (current.isPlaying) {
-                            if (remainingMs in 0L..syncIntervalMs) minOf(3000L, syncIntervalMs) else syncIntervalMs
-                        } else (syncIntervalMs * 2).coerceAtLeast(8000L)
-                        delay(pollDelay)
+                            if (durationMs > 0L && remainingMs > 0L) {
+                                remainingMs + 2000L
+                            } else {
+                                2000L
+                            }
+                        } else {
+                            30_000L
+                        }
+
+                        withTimeoutOrNull(pollDelay) {
+                            pollWake.receive()
+                        }
                     }
                     is CurrentlyPlayingResult.NoPlayback -> {
                         consecutiveNetworkErrors = 0
@@ -150,19 +173,16 @@ class SpotifyCloudManager(
                         lastSyncTimeMs.value = System.currentTimeMillis()
                         lastError.value = null
 
-                        val wasPlaying = mutablePlayback.value?.isPlaying == true
-                        if (wasPlaying && consecutiveNoPlayback < 2) {
-                            consecutiveNoPlayback++
-                            delay(1500L)
-                        } else {
-                            consecutiveNoPlayback = 0
-                            cachedQueue.clear()
-                            lastQueueTrackId = null
-                            mutablePlayback.value = null
-                            withContext(Dispatchers.Main) {
-                                onPlaybackReceived?.invoke(null)
-                            }
-                            delay((syncIntervalMs * 3).coerceAtLeast(15000L))
+                        cachedQueue.clear()
+                        lastQueueTrackId = null
+                        mutablePlayback.value = null
+                        withContext(Dispatchers.Main) {
+                            onPlaybackReceived?.invoke(null)
+                        }
+
+                        // Idle: poll every 30 seconds or until user interaction
+                        withTimeoutOrNull(30_000L) {
+                            pollWake.receive()
                         }
                     }
                     is CurrentlyPlayingResult.RateLimited -> {
@@ -294,17 +314,48 @@ class SpotifyCloudManager(
         }
     }
 
+    /**
+     * Immediately fetches the queue from Spotify API when user opens or requests the queue.
+     */
+    fun refreshQueueNow() {
+        scope.launch(Dispatchers.IO) {
+            ensureValidToken()
+            val token = settings.spotifyAccessToken
+            if (token.isNotBlank()) {
+                val q = client.fetchQueue(token)
+                val now = android.os.SystemClock.elapsedRealtime()
+                lastQueueFetchAt = now
+                if (q != null) {
+                    cachedQueue.clear()
+                    cachedQueue.addAll(q)
+                    val current = mutablePlayback.value
+                    if (current != null) {
+                        val currentWithQueue = current.copy(queue = cachedQueue.toList())
+                        mutablePlayback.value = currentWithQueue
+                        withContext(Dispatchers.Main) {
+                            onPlaybackReceived?.invoke(currentWithQueue)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fun triggerImmediatePoll() {
         scope.launch(Dispatchers.IO) {
             delay(200L)
+            ensureValidToken()
             val token = settings.spotifyAccessToken
             if (token.isNotBlank()) {
                 val res = client.fetchCurrentlyPlaying(token)
                 if (res is CurrentlyPlayingResult.Success) {
-                    mutablePlayback.value = res.playback
-                    withContext(Dispatchers.Main) { onPlaybackReceived?.invoke(res.playback) }
+                    val current = res.playback
+                    val withQueue = current.copy(queue = cachedQueue.toList())
+                    mutablePlayback.value = withQueue
+                    withContext(Dispatchers.Main) { onPlaybackReceived?.invoke(withQueue) }
                 }
             }
+            wakeUp()
         }
     }
 

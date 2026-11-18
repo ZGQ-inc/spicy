@@ -119,6 +119,7 @@ fun QueueList(state: PlayerUiState, viewModel: ExternalPlaybackViewModel, onJump
     // Only the rows there when it opens rise in turn; ones scrolled to later just appear.
     var opening by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
+        viewModel.cloudSpotifyManager?.refreshQueueNow()
         delay(OPEN_CASCADE_MS)
         opening = false
     }

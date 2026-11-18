@@ -2968,11 +2968,6 @@ class ExternalPlaybackViewModel(application: Application) : AndroidViewModel(app
                 lastPeriodicCheckMs = 0L
             }
             val now = SystemClock.elapsedRealtime()
-            if (isCloudSessionActive && mutableState.value.isPlaying && mutableState.value.durationMs > 0L) {
-                if (currentPositionMs() >= mutableState.value.durationMs) {
-                    cloudSpotifyManager?.triggerImmediatePoll()
-                }
-            }
             if (now - lastPeriodicCheckMs >= PERIODIC_CHECK_MS) {
                 lastPeriodicCheckMs = now
                 refreshOutputRoute()

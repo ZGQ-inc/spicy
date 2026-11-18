@@ -60,12 +60,18 @@ fun QuickSettingsModal(
     LaunchedEffect(visible) {
         if (visible) {
             screen = startOn
-            if (startOn == QuickScreen.Queue) UsageStats.count(UsageCounter.QUEUE)
+            if (startOn == QuickScreen.Queue) {
+                UsageStats.count(UsageCounter.QUEUE)
+                viewModel.cloudSpotifyManager?.refreshQueueNow()
+            }
             uploading = false
         }
     }
     fun open(target: QuickScreen) {
-        if (target == QuickScreen.Queue) UsageStats.count(UsageCounter.QUEUE)
+        if (target == QuickScreen.Queue) {
+            UsageStats.count(UsageCounter.QUEUE)
+            viewModel.cloudSpotifyManager?.refreshQueueNow()
+        }
         if (target == QuickScreen.LyricsManager) {
             UsageStats.count(UsageCounter.LYRICS_MANAGER)
             viewModel.refreshLocalLyrics()
